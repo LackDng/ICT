@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+logs/
+state/active_signals.json
+.venv/
+venv/
