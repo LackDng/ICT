@@ -26,6 +26,7 @@ def send_message(text: str) -> bool:
                 TELEGRAM_API,
                 json={"chat_id": config.TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"},
                 timeout=10,
+                verify=False,  # Bỏ qua SSL verify — fix lỗi certificate trên Windows
             )
             if resp.status_code == 200:
                 logger.info("Telegram: gửi thành công")

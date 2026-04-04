@@ -303,7 +303,10 @@ def main() -> None:
 
     except KeyboardInterrupt:
         logger.info("Bot dừng bởi người dùng (KeyboardInterrupt).")
-        send_message(format_warning_message("bot_stop", {}))
+        try:
+            send_message(format_warning_message("bot_stop", {}))
+        except Exception:
+            pass
     except Exception as e:
         logger.critical(f"Lỗi nghiêm trọng: {e}\n{traceback.format_exc()}")
         try:
@@ -312,7 +315,10 @@ def main() -> None:
             pass
         time.sleep(60)
     finally:
-        disconnect_mt5()
+        try:
+            disconnect_mt5()
+        except Exception:
+            pass
         logger.info("Bot đã dừng.")
 
 
