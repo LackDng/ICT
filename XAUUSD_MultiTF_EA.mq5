@@ -55,7 +55,8 @@ input int    InpSlippage       = 30;     // Slippage tối đa chấp nhận (po
 //+------------------------------------------------------------------+
 //| INDICATOR HANDLES - Tạo 1 lần trong OnInit, dùng lại mỗi tick  |
 //+------------------------------------------------------------------+
-int g_h4EMA21Handle    = INVALID_HANDLE;  // EMA21 trên H4
+int g_d1EMA21Handle    = INVALID_HANDLE;  // EMA21 tren D1 (bo loc khung ngay)
+int g_h4EMA21Handle    = INVALID_HANDLE;  // EMA21 tren H4
 int g_h1EMAFastHandle  = INVALID_HANDLE;  // EMA Fast (mặc định EMA8) trên H1
 int g_h1EMASlowHandle  = INVALID_HANDLE;  // EMA Slow (mặc định EMA21) trên H1
 int g_h1ADXHandle      = INVALID_HANDLE;  // ADX trên H1
@@ -105,6 +106,7 @@ int OnInit()
     }
 
     //--- Tạo tất cả indicator handles (tạo 1 lần, dùng lại mỗi tick - hiệu suất tốt hơn)
+    g_d1EMA21Handle   = iMA(sym, PERIOD_D1,  InpEMASlow,  0, MODE_EMA, PRICE_CLOSE);
     g_h4EMA21Handle   = iMA(sym, PERIOD_H4,  InpEMASlow,  0, MODE_EMA, PRICE_CLOSE);
     g_h1EMAFastHandle = iMA(sym, PERIOD_H1,  InpEMAFast,  0, MODE_EMA, PRICE_CLOSE);
     g_h1EMASlowHandle = iMA(sym, PERIOD_H1,  InpEMASlow,  0, MODE_EMA, PRICE_CLOSE);
@@ -114,7 +116,8 @@ int OnInit()
     g_m5ATRHandle     = iATR(sym, PERIOD_M5, InpATRPeriod);
 
     //--- Kiểm tra tất cả handles hợp lệ
-    if(g_h4EMA21Handle   == INVALID_HANDLE ||
+    if(g_d1EMA21Handle   == INVALID_HANDLE ||
+       g_h4EMA21Handle   == INVALID_HANDLE ||
        g_h1EMAFastHandle == INVALID_HANDLE ||
        g_h1EMASlowHandle == INVALID_HANDLE ||
        g_h1ADXHandle     == INVALID_HANDLE ||
@@ -153,6 +156,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
     //--- Giải phóng tất cả indicator handles để tránh rò rỉ bộ nhớ
+    if(g_d1EMA21Handle   != INVALID_HANDLE) IndicatorRelease(g_d1EMA21Handle);
     if(g_h4EMA21Handle   != INVALID_HANDLE) IndicatorRelease(g_h4EMA21Handle);
     if(g_h1EMAFastHandle != INVALID_HANDLE) IndicatorRelease(g_h1EMAFastHandle);
     if(g_h1EMASlowHandle != INVALID_HANDLE) IndicatorRelease(g_h1EMASlowHandle);
@@ -211,25 +215,42 @@ void OnTick()
     if(!FilterSpread())                return;
     if(InpNewsFilter && !FilterNews()) return;
 
-    //--- Bước 8: Phân tích H4 - Xu hướng chính
+    //--- Bước 8: Bo loc D1 - Khung ngay (lop loc cao nhat)
+    //    Chi giao dich khi D1 cung chieu -> tranh giao dich nguoc xu huong chinh
+    int d1Dir = GetD1Filter();
+    if(d1Dir == 0)
+    {
+        LogThrottled("D1", "[LOC D1] Khung ngay khong ro xu huong -> Bo qua", 3600);
+        return;
+    }
+
+    //--- Bước 9: Phân tích H4 - Xu hướng chính
     int h4Dir = GetH4Trend();
     if(h4Dir == 0) return;
 
-    //--- Bước 9: Phân tích H1 - EMA crossover + ADX
+    //--- Bước 9b: D1 và H4 phải cùng chiều
+    if(d1Dir != h4Dir)
+    {
+        LogThrottled("D1H4",
+            "[LOC] D1(" + DirToStr(d1Dir) + ") mau thuan H4(" + DirToStr(h4Dir) + ") -> Bo qua",
+            3600);
+        return;
+    }
+
+    //--- Bước 10: Phân tích H1 - Sustained EMA alignment + ADX + DI
     int h1Dir = GetH1Signal();
     if(h1Dir == 0) return;
 
-    //--- Bước 10: Kiểm tra mâu thuẫn H4/H1 -> không vào lệnh
+    //--- Bước 10b: Kiểm tra mâu thuẫn H4/H1 -> không vào lệnh
     if(h4Dir != h1Dir)
     {
         LogThrottled("CONFLICT",
-            "[LỌC] H4(" + DirToStr(h4Dir) + ") mâu thuẫn H1(" +
-            DirToStr(h1Dir) + ") -> Bỏ qua",
+            "[LOC] H4(" + DirToStr(h4Dir) + ") mau thuan H1(" + DirToStr(h1Dir) + ") -> Bo qua",
             1800);
         return;
     }
 
-    int signalDir = h4Dir; // Chiều giao dịch đã được H4 và H1 đồng thuận
+    int signalDir = h4Dir; // D1, H4, H1 da dong thuan
 
     //--- Bước 11: Giá phải pullback về EMA21 H1 (không đuổi giá)
     if(!CheckPullbackToEMA21H1(signalDir))
@@ -574,9 +595,61 @@ bool FilterNews()
 //+------------------------------------------------------------------+
 //| PHÂN TÍCH H4: Xác định xu hướng chính                           |
 //| Logic: Giá đóng cửa H4 > EMA21 AND EMA21 đang dốc lên -> Buy   |
-//|        Giá đóng cửa H4 < EMA21 AND EMA21 đang dốc xuống -> Sell |
-//| Yêu cầu EMA21 có slope rõ ràng để tránh thị trường ngang       |
-//| Trả về: 1=Bullish, -1=Bearish, 0=Không xác định                 |
+//+------------------------------------------------------------------+
+//| BO LOC D1: Xu huong khung ngay - lop loc cao nhat               |
+//| Logic: Gia dong cua D1 > EMA21 AND EMA21 dang tang -> Chi Buy   |
+//|        Gia dong cua D1 < EMA21 AND EMA21 dang giam -> Chi Sell  |
+//| Muc dich: Tranh giao dich nguoc xu huong chinh (D1 filter)      |
+//| Tra ve: 1=Bull, -1=Bear, 0=Khong xac dinh                       |
+//+------------------------------------------------------------------+
+int GetD1Filter()
+{
+    double ema21[];
+    ArraySetAsSeries(ema21, true);
+
+    // Lay 5 bars D1 da dong (tranh bar dang hinh thanh)
+    if(CopyBuffer(g_d1EMA21Handle, 0, 1, 5, ema21) <= 0)
+    {
+        Print("[LOI] Khong doc duoc EMA21 D1: ", GetLastError());
+        return 0;
+    }
+
+    double d1Close[];
+    ArraySetAsSeries(d1Close, true);
+    if(CopyClose(Symbol(), PERIOD_D1, 1, 3, d1Close) <= 0) return 0;
+
+    double lastClose = d1Close[0];
+    double lastEMA   = ema21[0];
+
+    // Slope D1: so sanh EMA21 hien tai vs 3 bars truoc (xu huong D1 phai ro rang)
+    bool rising  = (ema21[0] > ema21[3]);
+    bool falling = (ema21[0] < ema21[3]);
+
+    if(lastClose > lastEMA && rising)
+    {
+        LogThrottled("D1_BULL",
+            StringFormat("[D1] BUY | Close=%.2f > EMA21=%.2f | D1 slope up", lastClose, lastEMA),
+            3600);
+        return 1;
+    }
+    if(lastClose < lastEMA && falling)
+    {
+        LogThrottled("D1_BEAR",
+            StringFormat("[D1] SELL | Close=%.2f < EMA21=%.2f | D1 slope down", lastClose, lastEMA),
+            3600);
+        return -1;
+    }
+
+    LogThrottled("D1_FLAT",
+        StringFormat("[D1] Xu huong khong ro | Close=%.2f EMA21=%.2f slope:(%.2f->%.2f)",
+            lastClose, lastEMA, ema21[3], ema21[0]),
+        3600);
+    return 0;
+}
+
+//| Gia dong cua H4 < EMA21 AND EMA21 dang doc xuong -> Sell        |
+//| Yeu cau EMA21 co slope ro rang de tranh thi truong ngang        |
+//| Tra ve: 1=Bullish, -1=Bearish, 0=Khong xac dinh                 |
 //+------------------------------------------------------------------+
 int GetH4Trend()
 {
@@ -645,19 +718,19 @@ int GetH4Trend()
 //+------------------------------------------------------------------+
 int GetH1Signal()
 {
-    // --- Đọc EMA Fast và Slow trên H1 (4 bars đã đóng) ---
+    // Lay 8 bars H1 da dong (can du de kiem tra sustained alignment)
     double emaFast[], emaSlow[];
     ArraySetAsSeries(emaFast, true);
     ArraySetAsSeries(emaSlow, true);
 
-    if(CopyBuffer(g_h1EMAFastHandle, 0, 1, 4, emaFast) <= 0 ||
-       CopyBuffer(g_h1EMASlowHandle, 0, 1, 4, emaSlow) <= 0)
+    if(CopyBuffer(g_h1EMAFastHandle, 0, 1, 8, emaFast) <= 0 ||
+       CopyBuffer(g_h1EMASlowHandle, 0, 1, 8, emaSlow) <= 0)
     {
-        Print("[LỖI] Không đọc được EMA H1: ", GetLastError());
+        Print("[LOI] Khong doc duoc EMA H1: ", GetLastError());
         return 0;
     }
 
-    // --- Đọc ADX: buffer 0=ADX, buffer 1=+DI, buffer 2=-DI ---
+    // ADX: buffer 0=ADX chinh, buffer 1=+DI, buffer 2=-DI
     double adxMain[], plusDI[], minusDI[];
     ArraySetAsSeries(adxMain,  true);
     ArraySetAsSeries(plusDI,   true);
@@ -667,73 +740,93 @@ int GetH1Signal()
        CopyBuffer(g_h1ADXHandle, 1, 1, 3, plusDI)   <= 0 ||
        CopyBuffer(g_h1ADXHandle, 2, 1, 3, minusDI)  <= 0)
     {
-        Print("[LỖI] Không đọc được ADX/DI H1: ", GetLastError());
+        Print("[LOI] Khong doc duoc ADX/DI H1: ", GetLastError());
         return 0;
     }
 
-    double adxVal  = adxMain[0];  // ADX bar đã đóng gần nhất
-    double plusVal = plusDI[0];   // +DI
-    double minVal  = minusDI[0];  // -DI
+    double adxVal  = adxMain[0];
+    double plusVal = plusDI[0];
+    double minVal  = minusDI[0];
 
-    // --- Kiểm tra ngưỡng ADX ---
+    // --- Kiem tra nguong ADX ---
     if(adxVal <= InpADXMin)
     {
         LogThrottled("ADX_LOW",
-            StringFormat("[H1 ADX] %.1f <= %.0f -> Thị trường đi ngang, bỏ qua", adxVal, InpADXMin),
-            900);
+            StringFormat("[H1 ADX] %.1f <= %.0f -> Di ngang, bo qua", adxVal, InpADXMin), 900);
         return 0;
     }
     if(adxVal > InpADXMax)
     {
         LogThrottled("ADX_HIGH",
-            StringFormat("[H1 ADX] %.1f > %.0f -> Xu hướng kiệt sức, bỏ qua", adxVal, InpADXMax),
+            StringFormat("[H1 ADX] %.1f > %.0f -> Kiet suc, bo qua", adxVal, InpADXMax), 900);
+        return 0;
+    }
+
+    // --- DI direction: +DI phai lon hon -DI it nhat 3 don vi ---
+    // Nguong 3 tranh truong hop +DI va -DI gap nhau (khong ro chieu)
+    bool bullMomentum = (plusVal > minVal + 3.0);
+    bool bearMomentum = (minVal  > plusVal + 3.0);
+
+    if(!bullMomentum && !bearMomentum)
+    {
+        LogThrottled("DI_WEAK",
+            StringFormat("[H1 DI] Chieu khong ro: +DI=%.1f -DI=%.1f (can chenh lech >3)", plusVal, minVal),
             900);
         return 0;
     }
 
-    // --- Kiểm tra hướng DI (bộ lọc định hướng quan trọng nhất) ---
-    // +DI > -DI = momentum tăng; -DI > +DI = momentum giảm
-    bool bullMomentum = (plusVal > minVal);
-    bool bearMomentum = (minVal > plusVal);
+    // --- SUSTAINED EMA ALIGNMENT: EMA8 phai duy tri tren/duoi EMA21 it nhat 5/8 bars ---
+    // Day la thay doi chinh: KHONG dung EMA cross (lagging, bat dao chieu)
+    // Thay vao do, yeu cau EMA8 DA DUOC tren EMA21 nhieu bars = xu huong on dinh
+    int bullBars = 0; // So bars EMA8 > EMA21
+    int bearBars = 0; // So bars EMA8 < EMA21
 
-    if(!bullMomentum && !bearMomentum)
+    for(int i = 0; i < 8; i++)
     {
-        LogThrottled("DI_EQUAL", "[H1 DI] +DI = -DI -> Không rõ chiều, bỏ qua", 900);
+        if(emaFast[i] > emaSlow[i]) bullBars++;
+        if(emaFast[i] < emaSlow[i]) bearBars++;
+    }
+
+    // Yeu cau: it nhat 5/8 bars phai cung chieu (khong phai cross moi = trend on dinh)
+    // Va EMA8 hien tai van phai o dung chieu
+    bool sustainedBull = (bullBars >= 5 && emaFast[0] > emaSlow[0]);
+    bool sustainedBear = (bearBars >= 5 && emaFast[0] < emaSlow[0]);
+
+    if(!sustainedBull && !bearMomentum && !sustainedBear && !bullMomentum)
+    {
+        LogThrottled("H1_NOALIGN",
+            StringFormat("[H1] EMA chua on dinh | bull=%d/8 bear=%d/8 bars", bullBars, bearBars),
+            900);
         return 0;
     }
 
-    // --- Phát hiện EMA crossover trong 2 bars H1 gần nhất (tín hiệu còn mới) ---
-    // Giảm từ 4 xuống 2 bars: tín hiệu cũ hơn 2 giờ không còn giá trị
-    bool bullCross = false;
-    bool bearCross = false;
-
-    for(int i = 0; i < 2; i++)
+    // --- EMA gap: EMA8 phai cach EMA21 it nhat 0.05%% gia (tranh giao nhau lien tuc) ---
+    double gapPct = MathAbs(emaFast[0] - emaSlow[0]) / emaSlow[0] * 100.0;
+    if(gapPct < 0.05)
     {
-        if(emaFast[i+1] <= emaSlow[i+1] && emaFast[i] > emaSlow[i])
-        {
-            bullCross = true;
-            Print(StringFormat("[H1 EMA] Bullish cross %d bar trước | EMA%d=%.2f EMA%d=%.2f | ADX=%.1f +DI=%.1f -DI=%.1f",
-                i+1, InpEMAFast, emaFast[i], InpEMASlow, emaSlow[i], adxVal, plusVal, minVal));
-        }
-        if(emaFast[i+1] >= emaSlow[i+1] && emaFast[i] < emaSlow[i])
-        {
-            bearCross = true;
-            Print(StringFormat("[H1 EMA] Bearish cross %d bar trước | EMA%d=%.2f EMA%d=%.2f | ADX=%.1f +DI=%.1f -DI=%.1f",
-                i+1, InpEMAFast, emaFast[i], InpEMASlow, emaSlow[i], adxVal, plusVal, minVal));
-        }
+        LogThrottled("H1_NOGAP",
+            StringFormat("[H1] EMA gap qua nho: %.3f%% < 0.05%% -> EMA8 EMA21 sat nhau", gapPct),
+            900);
+        return 0;
     }
 
-    // Trạng thái EMA hiện tại (bar đã đóng gần nhất)
-    bool nowBull = (emaFast[0] > emaSlow[0]);
-    bool nowBear = (emaFast[0] < emaSlow[0]);
+    // --- Ket hop: sustained alignment + DI cung chieu ---
+    if(sustainedBull && bullMomentum)
+    {
+        Print(StringFormat("[H1] BUY | EMA%d>EMA%d (%d/8 bars) gap=%.3f%% | ADX=%.1f +DI=%.1f -DI=%.1f",
+            InpEMAFast, InpEMASlow, bullBars, gapPct, adxVal, plusVal, minVal));
+        return 1;
+    }
+    if(sustainedBear && bearMomentum)
+    {
+        Print(StringFormat("[H1] SELL | EMA%d<EMA%d (%d/8 bars) gap=%.3f%% | ADX=%.1f +DI=%.1f -DI=%.1f",
+            InpEMAFast, InpEMASlow, bearBars, gapPct, adxVal, plusVal, minVal));
+        return -1;
+    }
 
-    // Tín hiệu hợp lệ: cross gần đây + EMA hiện tại đúng chiều + DI xác nhận chiều
-    if(bullCross && nowBull && bullMomentum) return 1;
-    if(bearCross && nowBear && bearMomentum) return -1;
-
-    LogThrottled("H1_NOCROSS",
-        StringFormat("[H1] Không đủ điều kiện | EMA%d=%.2f vs EMA%d=%.2f | ADX=%.1f +DI=%.1f -DI=%.1f",
-            InpEMAFast, emaFast[0], InpEMASlow, emaSlow[0], adxVal, plusVal, minVal),
+    LogThrottled("H1_NOCONF",
+        StringFormat("[H1] EMA va DI khong dong thuan | bull=%d/8 bear=%d/8 +DI=%.1f -DI=%.1f",
+            bullBars, bearBars, plusVal, minVal),
         900);
     return 0;
 }
@@ -1232,10 +1325,11 @@ void ManageSingleOrderTrailing(double curPrice)
 //+------------------------------------------------------------------+
 void CheckAndTriggerOrder2(double curPrice, double slDist)
 {
-    // Tăng từ 50% lên 70% của SL distance:
-    // - 50% quá sớm -> L2 mở sau vài phút, nhân lỗ nhanh
-    // - 70% = giá đã đi sâu vào vùng nguy hiểm, cần trung bình giá
-    double triggerDist = slDist * 0.70;
+    // Trigger L2 o 85% cua SL distance:
+    // - Chi mo khi gia gan cham SL (con 15% duong den SL)
+    // - Dam bao L1 co du co hoi hoat dong truoc khi co L2
+    // - Khi L1 on dinh (win rate tot), co the giam ve 70%
+    double triggerDist = slDist * 0.85;
     bool   trigger     = false;
 
     if(g_tradeDir == 1  && curPrice <= g_entry1 - triggerDist) trigger = true;
