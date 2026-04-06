@@ -408,7 +408,7 @@ void SyncPositionState()
         {
             Print("[TRAILING] Lệnh 2 đóng → Dời SL lệnh 1 về entry: ",
                   DoubleToString(g_entry1, 2));
-            ModifyPositionSL(g_ticket1, g_entry1);
+            ModifyPositionSL(g_ticket1, g_entry1, false);
         }
     }
 
@@ -1003,7 +1003,7 @@ bool PlaceOrder1(int direction, double sl, double tp1, double tp2)
     g_tp2              = tp2;
     g_tp1Reached       = false;
     g_order2EverOpened = false;
-    g_ticket1          = res.position; // Có thể = 0, sẽ cập nhật qua SyncPositionState
+    g_ticket1          = res.deal;  // deal ticket; position ticket sẽ cập nhật qua OnTradeTransaction/SyncPositionState
     g_dailyTradeCount++;
 
     Print("╔═══════════ LỆNH 1 MỞ THÀNH CÔNG ═══════════╗");
@@ -1074,7 +1074,7 @@ void PlaceOrder2()
 
     g_hasOrder2        = true;
     g_order2EverOpened = true;
-    g_ticket2          = res.position;
+    g_ticket2          = res.deal;  // position ticket sẽ cập nhật qua OnTradeTransaction/SyncPositionState
     g_dailyTradeCount++;
 
     Print("╔═══════════ LỆNH 2 MỞ THÀNH CÔNG ═══════════╗");
