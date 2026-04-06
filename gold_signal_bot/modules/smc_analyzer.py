@@ -16,13 +16,34 @@ logger = logging.getLogger(__name__)
 PIP = 0.010  # 1 pip = 0.010 cho Gold
 
 
+def _find_h1_swings(df: pd.DataFrame, pivot: int = 3) -> dict:
+    """Tìm swing points nội tại trên H1 (pivot nhỏ hơn H4)."""
+    highs, lows = [], []
+    n = len(df)
+    for i in range(pivot, n - pivot):
+        if all(df["high"].iloc[i] >= df["high"].iloc[i - j] for j in range(1, pivot + 1)) and \
+           all(df["high"].iloc[i] >= df["high"].iloc[i + j] for j in range(1, pivot + 1)):
+            highs.append({"index": i, "price": df["high"].iloc[i], "time": df["time"].iloc[i]})
+        if all(df["low"].iloc[i] <= df["low"].iloc[i - j] for j in range(1, pivot + 1)) and \
+           all(df["low"].iloc[i] <= df["low"].iloc[i + j] for j in range(1, pivot + 1)):
+            lows.append({"index": i, "price": df["low"].iloc[i], "time": df["time"].iloc[i]})
+    return {"highs": highs, "lows": lows}
+
+
 def detect_bos_choch(
     df: pd.DataFrame,
     swing_highs: list,
     swing_lows: list,
     bias: str,
 ) -> list:
-    """Phát hiện BOS và CHoCH trong 50 nến gần nhất của H1."""
+    """Phát hiện BOS và CHoCH trong 50 nến gần nhất của H1.
+    Dùng kết hợp H4 swing points và H1 swing points nội tại.
+    """
+    # Gộp H4 swings với H1 swings nội tại (chỉ lấy H1 swing trong 100 nến gần nhất)
+    h1_swings = _find_h1_swings(df.iloc[-100:] if len(df) > 100 else df)
+    combined_highs = swing_highs + h1_swings["highs"]
+    combined_lows = swing_lows + h1_swings["lows"]
+
     result = []
     lookback = min(50, len(df))
     recent_df = df.iloc[-lookback:].reset_index(drop=True)
@@ -34,7 +55,7 @@ def detect_bos_choch(
         is_recent = i >= n - 10
 
         # BOS Bullish: close vượt swing high
-        for sh in swing_highs:
+        for sh in combined_highs:
             if close > sh["price"]:
                 result.append({
                     "type": "BOS",
@@ -47,7 +68,7 @@ def detect_bos_choch(
                 break
 
         # BOS Bearish: close phá swing low
-        for sl in swing_lows:
+        for sl in combined_lows:
             if close < sl["price"]:
                 result.append({
                     "type": "BOS",
@@ -61,7 +82,7 @@ def detect_bos_choch(
 
         # CHoCH
         if bias == "bullish":
-            for sl in swing_lows:
+            for sl in combined_lows:
                 if close < sl["price"]:
                     result.append({
                         "type": "CHoCH",
@@ -73,7 +94,7 @@ def detect_bos_choch(
                     })
                     break
         elif bias == "bearish":
-            for sh in swing_highs:
+            for sh in combined_highs:
                 if close > sh["price"]:
                     result.append({
                         "type": "CHoCH",
@@ -172,11 +193,43 @@ def find_fvg(df: pd.DataFrame, bias: str) -> list:
     return result
 
 
+def _find_ob_candidates(df: pd.DataFrame, bias: str) -> list:
+    """Fallback: tìm OB trực tiếp từ H1 swing points khi không có BOS.
+    Tìm nến mạnh ngược chiều trước một move lớn cùng chiều bias.
+    """
+    candidates = []
+    n = len(df)
+    lookback = min(config.OB_MAX_AGE_CANDLES, n - 3)
+    for i in range(n - lookback, n - 2):
+        candle = df.iloc[i]
+        next1 = df.iloc[i + 1]
+        next2 = df.iloc[i + 2] if i + 2 < n else None
+
+        if bias == "bullish":
+            # Nến bearish mạnh, tiếp theo là 2 nến bullish mạnh
+            if (not candle["is_bullish"] and candle["body_ratio"] >= config.OB_MIN_BODY_RATIO
+                    and next1["is_bullish"] and next1["body_ratio"] >= 0.5):
+                age = n - 1 - i
+                candidates.append({"index": i, "age": age, "candle": candle})
+        else:
+            # Nến bullish mạnh, tiếp theo là 2 nến bearish mạnh
+            if (candle["is_bullish"] and candle["body_ratio"] >= config.OB_MIN_BODY_RATIO
+                    and not next1["is_bullish"] and next1["body_ratio"] >= 0.5):
+                age = n - 1 - i
+                candidates.append({"index": i, "age": age, "candle": candle})
+    return candidates
+
+
 def find_order_blocks(df: pd.DataFrame, bos_list: list, bias: str) -> list:
-    """Phát hiện Order Block trên H1."""
+    """Phát hiện Order Block trên H1.
+    Dùng BOS-based OB trước, fallback sang H1 swing-based OB nếu không tìm được.
+    """
     result = []
     n = len(df)
     fvg_list = find_fvg(df, bias)
+
+    # Tập hợp ob_idx đã dùng để tránh trùng lặp
+    used_indices: set = set()
 
     for bos in bos_list:
         if bos["direction"] != bias:
@@ -185,8 +238,24 @@ def find_order_blocks(df: pd.DataFrame, bos_list: list, bias: str) -> list:
         if bos_idx < 1:
             continue
 
-        # Tìm nến OB ngay trước BOS
-        ob_idx = bos_idx - 1
+        # Tìm nến OB ngay trước BOS (tìm lùi tối đa 3 nến)
+        ob_idx = None
+        for back in range(1, 4):
+            candidate_idx = bos_idx - back
+            if candidate_idx < 0:
+                break
+            cand = df.iloc[candidate_idx]
+            if bias == "bullish" and not cand["is_bullish"] and cand["body_ratio"] >= config.OB_MIN_BODY_RATIO:
+                ob_idx = candidate_idx
+                break
+            if bias == "bearish" and cand["is_bullish"] and cand["body_ratio"] >= config.OB_MIN_BODY_RATIO:
+                ob_idx = candidate_idx
+                break
+        if ob_idx is None:
+            ob_idx = bos_idx - 1
+        candle = df.iloc[ob_idx]
+        used_indices.add(ob_idx)
+        age = n - 1 - ob_idx
         candle = df.iloc[ob_idx]
         age = n - 1 - ob_idx
         if age > config.OB_MAX_AGE_CANDLES:
@@ -246,6 +315,48 @@ def find_order_blocks(df: pd.DataFrame, bos_list: list, bias: str) -> list:
             "age_candles": age,
             "bos_ref": bos,
         })
+
+    # Fallback: nếu không có BOS-based OB, dùng H1 swing-based OB
+    if not result:
+        for cand in _find_ob_candidates(df, bias):
+            idx = cand["index"]
+            if idx in used_indices:
+                continue
+            candle = cand["candle"]
+            age = cand["age"]
+            top = candle["high"]
+            bottom = candle["low"]
+            subsequent = df.iloc[idx + 1:]
+            if len(subsequent) > 0:
+                if bias == "bullish":
+                    fill_ratio = _calc_fill_ratio(top, bottom, subsequent["high"].max(), subsequent["low"].min())
+                else:
+                    fill_ratio = _calc_fill_ratio(top, bottom, subsequent["high"].max(), subsequent["low"].min())
+            else:
+                fill_ratio = 0.0
+            if fill_ratio > 0.8:
+                continue
+            status = "active" if fill_ratio <= 0.5 else "weakened"
+            score_adj = -1 if status == "weakened" else 0
+            has_fvg = any(
+                fvg["time"] >= candle["time"] and
+                abs(fvg.get("bottom", fvg.get("mid", 0)) - top) / PIP <= config.OB_FVG_MAX_GAP
+                for fvg in fvg_list
+            )
+            score = 2 if has_fvg else 1
+            result.append({
+                "type": bias,
+                "top": top,
+                "bottom": bottom,
+                "mid": (top + bottom) / 2,
+                "score": score,
+                "has_fvg": has_fvg,
+                "status": status,
+                "score_adj": score_adj,
+                "time": candle["time"],
+                "age_candles": age,
+                "bos_ref": None,
+            })
 
     # Sắp xếp theo score giảm dần, lấy tốt nhất 5
     result = sorted(result, key=lambda x: x["score"] + x["score_adj"], reverse=True)[:5]

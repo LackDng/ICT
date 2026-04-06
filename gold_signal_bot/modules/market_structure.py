@@ -292,12 +292,13 @@ def analyze_market_structure(
     price_zone = get_price_zone(current_price, sh_d1, sl_d1) if sh_d1 and sl_d1 else {}
 
     # Quyết định trade
+    # Cho phép trade khi giá ở discount/equilibrium (buy) hoặc premium/equilibrium (sell)
     if bias_data["confidence"] in ("high", "medium"):
         zone = price_zone.get("zone", "")
-        if bias_data["bias"] == "bullish" and zone == "discount":
+        if bias_data["bias"] == "bullish" and zone in ("discount", "equilibrium"):
             can_trade = True
             trade_direction = "buy"
-        elif bias_data["bias"] == "bearish" and zone == "premium":
+        elif bias_data["bias"] == "bearish" and zone in ("premium", "equilibrium"):
             can_trade = True
             trade_direction = "sell"
 
