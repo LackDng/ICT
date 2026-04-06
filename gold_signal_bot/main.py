@@ -110,7 +110,6 @@ def run_signal_scan(signal_mgr: SignalManager) -> None:
 
     if market_data["bias_data"].get("is_ranging"):
         logger.info("Thị trường ranging, bỏ qua.")
-        send_message(format_warning_message("ranging", {"price": current_price, "atr": 0}))
         return
 
     if not market_data["can_trade"]:
@@ -131,11 +130,7 @@ def run_signal_scan(signal_mgr: SignalManager) -> None:
         return
 
     if smc_data.get("has_choch"):
-        send_message(format_warning_message("choch", {
-            "direction": smc_data.get("choch_direction", ""),
-            "price": current_price,
-            "bias": bias_data["bias"],
-        }))
+        logger.info(f"CHoCH H1 phát hiện ({smc_data.get('choch_direction')}) — không gửi Telegram, tiếp tục phân tích")
 
     # 7. Kiểm tra entry M15
     try:
@@ -146,13 +141,6 @@ def run_signal_scan(signal_mgr: SignalManager) -> None:
 
     if not entry_data["signal"]:
         logger.info(f"Không có signal: {entry_data['reject_reasons']}")
-        sweep = entry_data.get("sweep_data", {})
-        if sweep.get("detected") and not sweep.get("valid"):
-            send_message(format_warning_message("liquidity_grab", {
-                "direction": sweep.get("direction", ""),
-                "price": sweep.get("swept_level", 0),
-                "missing_conditions": sweep.get("missing_conditions", []),
-            }))
         return
 
     direction = entry_data["direction"]
