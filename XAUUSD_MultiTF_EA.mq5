@@ -573,8 +573,9 @@ bool FilterNews()
 
 //+------------------------------------------------------------------+
 //| PHÂN TÍCH H4: Xác định xu hướng chính                           |
-//| Logic: Giá đóng cửa H4 > EMA21 → Chỉ Buy                       |
-//|        Giá đóng cửa H4 < EMA21 → Chỉ Sell                      |
+//| Logic: Giá đóng cửa H4 > EMA21 AND EMA21 đang dốc lên → Buy   |
+//|        Giá đóng cửa H4 < EMA21 AND EMA21 đang dốc xuống → Sell |
+//| Yêu cầu EMA21 có slope rõ ràng để tránh thị trường ngang       |
 //| Trả về: 1=Bullish, -1=Bearish, 0=Không xác định                 |
 //+------------------------------------------------------------------+
 int GetH4Trend()
@@ -582,8 +583,8 @@ int GetH4Trend()
     double ema21[];
     ArraySetAsSeries(ema21, true);
 
-    // Đọc từ bar index 1 (bar đã đóng gần nhất, tránh bar đang hình thành)
-    if(CopyBuffer(g_h4EMA21Handle, 0, 1, 3, ema21) <= 0)
+    // Lấy 4 bars để kiểm tra slope EMA21 H4
+    if(CopyBuffer(g_h4EMA21Handle, 0, 1, 4, ema21) <= 0)
     {
         Print("[LỖI] Không đọc được EMA21 H4: ", GetLastError());
         return 0;
@@ -600,53 +601,79 @@ int GetH4Trend()
     double lastClose = h4Close[0]; // Nến H4 đã đóng gần nhất
     double lastEMA21 = ema21[0];
 
-    if(lastClose > lastEMA21)
+    // Kiểm tra slope EMA21 H4: EMA21 hiện tại phải cao hơn/thấp hơn 2 bars trước
+    // Dùng 2 bars để tránh noise 1 bar
+    bool ema21Rising  = (ema21[0] > ema21[2]); // EMA21 đang dốc lên
+    bool ema21Falling = (ema21[0] < ema21[2]); // EMA21 đang dốc xuống
+
+    // BUY: giá trên EMA21 VÀ EMA21 đang dốc lên (xu hướng tăng thực sự)
+    if(lastClose > lastEMA21 && ema21Rising)
     {
         LogThrottled("H4_BULL",
-            StringFormat("[H4] BUY only | Đóng=%.2f > EMA21=%.2f", lastClose, lastEMA21),
+            StringFormat("[H4] BUY | Đóng=%.2f > EMA21=%.2f | EMA21 slope↑ (%.2f→%.2f)",
+                lastClose, lastEMA21, ema21[2], ema21[0]),
             3600);
         return 1;
     }
-    else if(lastClose < lastEMA21)
+
+    // SELL: giá dưới EMA21 VÀ EMA21 đang dốc xuống (xu hướng giảm thực sự)
+    if(lastClose < lastEMA21 && ema21Falling)
     {
         LogThrottled("H4_BEAR",
-            StringFormat("[H4] SELL only | Đóng=%.2f < EMA21=%.2f", lastClose, lastEMA21),
+            StringFormat("[H4] SELL | Đóng=%.2f < EMA21=%.2f | EMA21 slope↓ (%.2f→%.2f)",
+                lastClose, lastEMA21, ema21[2], ema21[0]),
             3600);
         return -1;
     }
 
-    return 0; // Giá chính xác tại EMA21 → bỏ qua
+    // Không đủ điều kiện: giá và slope mâu thuẫn (thị trường ngang/đảo chiều)
+    LogThrottled("H4_FLAT",
+        StringFormat("[H4] Xu hướng không rõ | Đóng=%.2f EMA21=%.2f slope:(%.2f→%.2f)",
+            lastClose, lastEMA21, ema21[2], ema21[0]),
+        3600);
+    return 0;
 }
 
 //+------------------------------------------------------------------+
-//| PHÂN TÍCH H1: EMA crossover + ADX filter                        |
-//| Logic: EMA8 cắt EMA21 cùng chiều H4 + ADX trong ngưỡng cho phép |
+//| PHÂN TÍCH H1: EMA crossover + ADX + DI direction filter         |
+//| Logic:                                                            |
+//|  - EMA8 cắt EMA21 trong 2 bars H1 gần nhất (tín hiệu còn mới)  |
+//|  - ADX > InpADXMin (xu hướng đủ mạnh)                           |
+//|  - ADX ≤ InpADXMax (không kiệt sức)                             |
+//|  - +DI > -DI cho Buy | -DI > +DI cho Sell (định hướng momentum) |
 //| Trả về: 1=Buy signal, -1=Sell signal, 0=Không tín hiệu          |
 //+------------------------------------------------------------------+
 int GetH1Signal()
 {
-    // --- Đọc EMA Fast và Slow trên H1 (5 bars đã đóng) ---
+    // --- Đọc EMA Fast và Slow trên H1 (4 bars đã đóng) ---
     double emaFast[], emaSlow[];
     ArraySetAsSeries(emaFast, true);
     ArraySetAsSeries(emaSlow, true);
 
-    if(CopyBuffer(g_h1EMAFastHandle, 0, 1, 5, emaFast) <= 0 ||
-       CopyBuffer(g_h1EMASlowHandle, 0, 1, 5, emaSlow) <= 0)
+    if(CopyBuffer(g_h1EMAFastHandle, 0, 1, 4, emaFast) <= 0 ||
+       CopyBuffer(g_h1EMASlowHandle, 0, 1, 4, emaSlow) <= 0)
     {
         Print("[LỖI] Không đọc được EMA H1: ", GetLastError());
         return 0;
     }
 
-    // --- Đọc ADX (buffer 0 = đường ADX chính) ---
-    double adxBuf[];
-    ArraySetAsSeries(adxBuf, true);
-    if(CopyBuffer(g_h1ADXHandle, 0, 1, 3, adxBuf) <= 0)
+    // --- Đọc ADX: buffer 0=ADX, buffer 1=+DI, buffer 2=-DI ---
+    double adxMain[], plusDI[], minusDI[];
+    ArraySetAsSeries(adxMain,  true);
+    ArraySetAsSeries(plusDI,   true);
+    ArraySetAsSeries(minusDI,  true);
+
+    if(CopyBuffer(g_h1ADXHandle, 0, 1, 3, adxMain)  <= 0 ||
+       CopyBuffer(g_h1ADXHandle, 1, 1, 3, plusDI)   <= 0 ||
+       CopyBuffer(g_h1ADXHandle, 2, 1, 3, minusDI)  <= 0)
     {
-        Print("[LỖI] Không đọc được ADX H1: ", GetLastError());
+        Print("[LỖI] Không đọc được ADX/DI H1: ", GetLastError());
         return 0;
     }
 
-    double adxVal = adxBuf[0]; // ADX của bar H1 đã đóng gần nhất
+    double adxVal  = adxMain[0];  // ADX bar đã đóng gần nhất
+    double plusVal = plusDI[0];   // +DI
+    double minVal  = minusDI[0];  // -DI
 
     // --- Kiểm tra ngưỡng ADX ---
     if(adxVal <= InpADXMin)
@@ -664,24 +691,35 @@ int GetH1Signal()
         return 0;
     }
 
-    // --- Phát hiện EMA crossover trong 4 bars H1 gần nhất ---
-    // Index: [0]=bar đóng gần nhất, [1]=bar trước, [2]...[4]=xa hơn
-    bool bullCross = false; // EMA Fast vừa cắt lên EMA Slow
-    bool bearCross = false; // EMA Fast vừa cắt xuống EMA Slow
+    // --- Kiểm tra hướng DI (bộ lọc định hướng quan trọng nhất) ---
+    // +DI > -DI = momentum tăng; -DI > +DI = momentum giảm
+    bool bullMomentum = (plusVal > minVal);
+    bool bearMomentum = (minVal > plusVal);
 
-    for(int i = 0; i < 4; i++)
+    if(!bullMomentum && !bearMomentum)
+    {
+        LogThrottled("DI_EQUAL", "[H1 DI] +DI = -DI → Không rõ chiều, bỏ qua", 900);
+        return 0;
+    }
+
+    // --- Phát hiện EMA crossover trong 2 bars H1 gần nhất (tín hiệu còn mới) ---
+    // Giảm từ 4 xuống 2 bars: tín hiệu cũ hơn 2 giờ không còn giá trị
+    bool bullCross = false;
+    bool bearCross = false;
+
+    for(int i = 0; i < 2; i++)
     {
         if(emaFast[i+1] <= emaSlow[i+1] && emaFast[i] > emaSlow[i])
         {
             bullCross = true;
-            Print(StringFormat("[H1 EMA] Bullish cross %d bar trước | EMA%d=%.2f EMA%d=%.2f ADX=%.1f",
-                i+1, InpEMAFast, emaFast[i], InpEMASlow, emaSlow[i], adxVal));
+            Print(StringFormat("[H1 EMA] Bullish cross %d bar trước | EMA%d=%.2f EMA%d=%.2f | ADX=%.1f +DI=%.1f -DI=%.1f",
+                i+1, InpEMAFast, emaFast[i], InpEMASlow, emaSlow[i], adxVal, plusVal, minVal));
         }
         if(emaFast[i+1] >= emaSlow[i+1] && emaFast[i] < emaSlow[i])
         {
             bearCross = true;
-            Print(StringFormat("[H1 EMA] Bearish cross %d bar trước | EMA%d=%.2f EMA%d=%.2f ADX=%.1f",
-                i+1, InpEMAFast, emaFast[i], InpEMASlow, emaSlow[i], adxVal));
+            Print(StringFormat("[H1 EMA] Bearish cross %d bar trước | EMA%d=%.2f EMA%d=%.2f | ADX=%.1f +DI=%.1f -DI=%.1f",
+                i+1, InpEMAFast, emaFast[i], InpEMASlow, emaSlow[i], adxVal, plusVal, minVal));
         }
     }
 
@@ -689,13 +727,13 @@ int GetH1Signal()
     bool nowBull = (emaFast[0] > emaSlow[0]);
     bool nowBear = (emaFast[0] < emaSlow[0]);
 
-    // Tín hiệu hợp lệ: có cross gần đây VÀ trạng thái hiện tại vẫn đúng chiều
-    if(bullCross && nowBull) return 1;
-    if(bearCross && nowBear) return -1;
+    // Tín hiệu hợp lệ: cross gần đây + EMA hiện tại đúng chiều + DI xác nhận chiều
+    if(bullCross && nowBull && bullMomentum) return 1;
+    if(bearCross && nowBear && bearMomentum) return -1;
 
     LogThrottled("H1_NOCROSS",
-        StringFormat("[H1] Không có EMA cross hợp lệ | EMA%d=%.2f vs EMA%d=%.2f | ADX=%.1f",
-            InpEMAFast, emaFast[0], InpEMASlow, emaSlow[0], adxVal),
+        StringFormat("[H1] Không đủ điều kiện | EMA%d=%.2f vs EMA%d=%.2f | ADX=%.1f +DI=%.1f -DI=%.1f",
+            InpEMAFast, emaFast[0], InpEMASlow, emaSlow[0], adxVal, plusVal, minVal),
         900);
     return 0;
 }
@@ -787,8 +825,9 @@ bool ConfirmM15Trend(int direction)
 
 //+------------------------------------------------------------------+
 //| XÁC NHẬN NẾN M5 ĐÓNG CỬA CÙNG CHIỀU                            |
-//| Logic: Nến M5 vừa đóng phải là nến tăng (Buy) hoặc giảm (Sell) |
+//| Logic: 2 nến M5 liên tiếp vừa đóng phải cùng chiều (momentum)  |
 //|        Loại bỏ nến doji (thân nến quá nhỏ)                      |
+//| Yêu cầu 2 nến liên tiếp để lọc false signal 1 nến đơn          |
 //+------------------------------------------------------------------+
 bool ConfirmM5ClosedCandle(int direction)
 {
@@ -796,39 +835,49 @@ bool ConfirmM5ClosedCandle(int direction)
     ArraySetAsSeries(m5Open, true);
     ArraySetAsSeries(m5Close, true);
 
-    // Bar index 1 = nến M5 vừa đóng (bar 0 đang hình thành)
-    if(CopyOpen (Symbol(), PERIOD_M5, 1, 1, m5Open)  <= 0) return false;
-    if(CopyClose(Symbol(), PERIOD_M5, 1, 1, m5Close) <= 0) return false;
+    // Lấy 2 nến M5 đã đóng gần nhất (bar 1 và bar 2)
+    if(CopyOpen (Symbol(), PERIOD_M5, 1, 2, m5Open)  <= 0) return false;
+    if(CopyClose(Symbol(), PERIOD_M5, 1, 2, m5Close) <= 0) return false;
 
-    double barOpen  = m5Open[0];
-    double barClose = m5Close[0];
-    double bodySize = MathAbs(barClose - barOpen);
+    // Nến 1 = bar vừa đóng (index 0), Nến 2 = bar trước đó (index 1)
+    double body1 = MathAbs(m5Close[0] - m5Open[0]);
+    double body2 = MathAbs(m5Close[1] - m5Open[1]);
 
-    // Yêu cầu thân nến tối thiểu 5 points (tránh doji)
+    // Yêu cầu thân nến tối thiểu 5 points mỗi nến (tránh doji)
     double minBody = SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 5;
-    if(bodySize < minBody)
+
+    if(body1 < minBody)
     {
-        Print(StringFormat("[M5] Nến doji/quá nhỏ (body=%.3f < %.3f) → Bỏ qua",
-            bodySize, minBody));
+        Print(StringFormat("[M5] Nến 1 doji (body=%.3f < %.3f) → Bỏ qua", body1, minBody));
+        return false;
+    }
+    if(body2 < minBody)
+    {
+        Print(StringFormat("[M5] Nến 2 doji (body=%.3f < %.3f) → Bỏ qua", body2, minBody));
         return false;
     }
 
-    bool bullCandle = (barClose > barOpen);
-    bool bearCandle = (barClose < barOpen);
+    bool bull1 = (m5Close[0] > m5Open[0]);
+    bool bull2 = (m5Close[1] > m5Open[1]);
+    bool bear1 = (m5Close[0] < m5Open[0]);
+    bool bear2 = (m5Close[1] < m5Open[1]);
 
-    if(direction == 1 && bullCandle)
+    // Buy: cả 2 nến liên tiếp phải là nến tăng
+    if(direction == 1 && bull1 && bull2)
     {
-        Print(StringFormat("[M5] Xác nhận BUY | Nến tăng: O=%.2f C=%.2f Body=%.2f",
-            barOpen, barClose, bodySize));
+        Print(StringFormat("[M5] Xác nhận BUY | 2 nến tăng: C1=%.2f C2=%.2f",
+            m5Close[0], m5Close[1]));
         return true;
     }
-    if(direction == -1 && bearCandle)
+    // Sell: cả 2 nến liên tiếp phải là nến giảm
+    if(direction == -1 && bear1 && bear2)
     {
-        Print(StringFormat("[M5] Xác nhận SELL | Nến giảm: O=%.2f C=%.2f Body=%.2f",
-            barOpen, barClose, bodySize));
+        Print(StringFormat("[M5] Xác nhận SELL | 2 nến giảm: C1=%.2f C2=%.2f",
+            m5Close[0], m5Close[1]));
         return true;
     }
 
+    Print(StringFormat("[M5] 2 nến không cùng chiều %s → Bỏ qua", DirToStr(direction)));
     return false;
 }
 
@@ -893,7 +942,7 @@ bool CalculateSLTP(int  direction,
             structLevel = m5Low[ArrayMinimum(m5Low, 0, SWING_BARS)];
             Print(StringFormat("[SL] Fallback Lowest Low (30 bar) = %.2f", structLevel));
         }
-        sl = structLevel - atrVal * 0.5; // Buffer bên dưới swing low
+        sl = structLevel - atrVal * 1.5; // Buffer bên dưới swing low (1.5×ATR tránh noise)
     }
     else // Sell → tìm Swing High gần nhất
     {
@@ -912,7 +961,7 @@ bool CalculateSLTP(int  direction,
             structLevel = m5High[ArrayMaximum(m5High, 0, SWING_BARS)];
             Print(StringFormat("[SL] Fallback Highest High (30 bar) = %.2f", structLevel));
         }
-        sl = structLevel + atrVal * 0.5; // Buffer bên trên swing high
+        sl = structLevel + atrVal * 1.5; // Buffer bên trên swing high (1.5×ATR tránh noise)
     }
 
     sl = NormalizeDouble(sl, digits);
@@ -1183,16 +1232,19 @@ void ManageSingleOrderTrailing(double curPrice)
 //+------------------------------------------------------------------+
 void CheckAndTriggerOrder2(double curPrice, double slDist)
 {
-    double halfSL    = slDist * 0.5;
-    bool   trigger   = false;
+    // Tăng từ 50% lên 70% của SL distance:
+    // - 50% quá sớm → L2 mở sau vài phút, nhân lỗ nhanh
+    // - 70% = giá đã đi sâu vào vùng nguy hiểm, cần trung bình giá
+    double triggerDist = slDist * 0.70;
+    bool   trigger     = false;
 
-    if(g_tradeDir == 1 && curPrice <= g_entry1 - halfSL) trigger = true;
-    if(g_tradeDir == -1 && curPrice >= g_entry1 + halfSL) trigger = true;
+    if(g_tradeDir == 1  && curPrice <= g_entry1 - triggerDist) trigger = true;
+    if(g_tradeDir == -1 && curPrice >= g_entry1 + triggerDist) trigger = true;
 
     if(trigger)
     {
-        Print(StringFormat("[L2] Kích hoạt! Giá=%.2f | Entry=%.2f | 50%%SL=%.2f giá",
-            curPrice, g_entry1, halfSL));
+        Print(StringFormat("[L2] Kích hoạt! Giá=%.2f | Entry=%.2f | 70%%SL=%.2f giá (SL=%.2f)",
+            curPrice, g_entry1, triggerDist, g_sl));
         PlaceOrder2();
     }
 }
