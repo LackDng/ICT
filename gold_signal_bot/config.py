@@ -4,7 +4,6 @@ Không hardcode bất kỳ giá trị nào trong các module khác.
 """
 import os
 from dotenv import load_dotenv
-import MetaTrader5 as mt5
 
 load_dotenv()
 
@@ -18,12 +17,12 @@ SYMBOL: str = "XAUUSD"
 TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# ─── Timeframes ────────────────────────────────────────────────────────────────
-TF_D1: int = mt5.TIMEFRAME_D1
-TF_H4: int = mt5.TIMEFRAME_H4
-TF_H1: int = mt5.TIMEFRAME_H1
-TF_M15: int = mt5.TIMEFRAME_M15
-TF_M5: int = mt5.TIMEFRAME_M5
+# ─── Timeframes (MetaTrader5 integer constants — cố định, không cần import mt5) ─
+TF_D1: int  = 16408   # mt5.TIMEFRAME_D1
+TF_H4: int  = 16388   # mt5.TIMEFRAME_H4
+TF_H1: int  = 16385   # mt5.TIMEFRAME_H1
+TF_M15: int = 15      # mt5.TIMEFRAME_M15
+TF_M5: int  = 5       # mt5.TIMEFRAME_M5
 
 # ─── Số nến lấy ────────────────────────────────────────────────────────────────
 CANDLES_D1: int = 100
