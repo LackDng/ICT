@@ -45,6 +45,9 @@ input double InpMaxSpreadGia   = 30.0;   // Max spread tính bằng giá ($) - t
 input int    InpMaxDailyTrades = 10;     // Số lệnh tối đa mỗi ngày (reset 00:00 GMT)
 input int    InpMaxConsecLoss  = 3;      // Số lệnh thua liên tiếp tối đa trước khi dừng
 input bool   InpNewsFilter     = true;   // Bật/tắt bộ lọc tin tức tự động
+input bool   InpPartialCloseTP1= true;   // Dong 50%% L1 tai TP1 (lock profit, SL->entry)
+input int    InpMaxHoldBarsH1  = 12;     // Tu dong dong sau X bars H1 neu chua TP1 (0=tat)
+input double InpL2TriggerPct   = 0.70;   // Kich hoat L2 o X%% khoang cach SL (mac dinh 70%%)
 
 //--- Cài đặt hệ thống
 input group           "=== CÀI ĐẶT HỆ THỐNG ==="
@@ -90,6 +93,9 @@ bool     g_tp1Reached        = false; // Cờ đã đạt TP1 chưa (cho trailin
 
 //--- Chống tín hiệu lặp trong cùng 1 bar M5
 datetime g_lastSignalBar     = 0;
+
+//--- Thoi gian mo lenh 1 (de time-based exit)
+datetime g_tradeOpenTime     = 0;
 
 
 //+------------------------------------------------------------------+
@@ -437,9 +443,12 @@ void SyncPositionState()
     g_hasOrder1 = foundOrder1;
     g_hasOrder2 = foundOrder2;
 
-    // Reset order2 flag nếu không còn lệnh nào
+    // Reset order2 flag va thoi gian neu khong con lenh nao
     if(!g_hasOrder1 && !g_hasOrder2)
+    {
         g_order2EverOpened = false;
+        g_tradeOpenTime    = 0;
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -838,53 +847,85 @@ int GetH1Signal()
 //+------------------------------------------------------------------+
 bool CheckPullbackToEMA21H1(int direction)
 {
-    const int BARS = 10; // Số bar H1 kiểm tra ngược về quá khứ
+    // Pullback phai xay ra trong 4 bar H1 gan nhat (khong chase gia cu)
+    const int BARS = 4;
 
     double ema21[];
     ArraySetAsSeries(ema21, true);
-    if(CopyBuffer(g_h1EMASlowHandle, 0, 1, BARS, ema21) <= 0) return false;
+    // Doc them 1 bar hien tai (bar 0) de kiem tra gia hien tai
+    if(CopyBuffer(g_h1EMASlowHandle, 0, 0, BARS + 1, ema21) <= 0) return false;
 
-    double h1High[], h1Low[];
-    ArraySetAsSeries(h1High, true);
-    ArraySetAsSeries(h1Low, true);
-    if(CopyHigh(Symbol(), PERIOD_H1, 1, BARS, h1High) <= 0) return false;
-    if(CopyLow (Symbol(), PERIOD_H1, 1, BARS, h1Low)  <= 0) return false;
+    double h1High[], h1Low[], h1Close[];
+    ArraySetAsSeries(h1High,  true);
+    ArraySetAsSeries(h1Low,   true);
+    ArraySetAsSeries(h1Close, true);
+    if(CopyHigh (Symbol(), PERIOD_H1, 1, BARS, h1High)  <= 0) return false;
+    if(CopyLow  (Symbol(), PERIOD_H1, 1, BARS, h1Low)   <= 0) return false;
+    if(CopyClose(Symbol(), PERIOD_H1, 1, BARS, h1Close) <= 0) return false;
+
+    bool pullbackFound = false;
+    int  pbBar         = -1;
 
     for(int i = 0; i < BARS; i++)
     {
-        double ema     = ema21[i];
-        // Dung sai 0.15% của EMA (~= $3 khi vàng ở $2000)
-        double tol     = ema * 0.0015;
+        double ema = ema21[i + 1]; // bar i da dong tuong ung ema21[i+1] (0=hien tai)
+        double tol = ema * 0.0015; // 0.15% tolerance (~$3 tai XAUUSD $2000)
 
-        if(direction == 1) // Buy: Low phải chạm về EMA21 từ trên
+        if(direction == 1) // Buy: Low phai cham EMA21
         {
-            if(h1Low[i] <= ema + tol) // Low chạm hoặc xuyên dưới EMA21
+            if(h1Low[i] <= ema + tol)
             {
-                Print(StringFormat("[PULLBACK] Bar H1 -%d: Low=%.2f <= EMA21=%.2f+tol -> OK",
-                    i+1, h1Low[i], ema));
-                return true;
+                pullbackFound = true;
+                pbBar = i;
+                break;
             }
         }
-        else // Sell: High phải chạm về EMA21 từ dưới
+        else // Sell: High phai cham EMA21
         {
-            if(h1High[i] >= ema - tol) // High chạm hoặc xuyên trên EMA21
+            if(h1High[i] >= ema - tol)
             {
-                Print(StringFormat("[PULLBACK] Bar H1 -%d: High=%.2f >= EMA21=%.2f-tol -> OK",
-                    i+1, h1High[i], ema));
-                return true;
+                pullbackFound = true;
+                pbBar = i;
+                break;
             }
         }
     }
 
-    // Kiểm tra thêm: khoảng cách hiện tại so với EMA21
-    double curPrice = (direction == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
-                                       : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-    double distPct  = MathAbs(curPrice - ema21[0]) / ema21[0] * 100.0;
-    LogThrottled("NO_PULLBACK",
-        StringFormat("[PULLBACK] Chưa pullback về EMA21 H1 trong %d bar. Khoảng cách: %.2f%%",
-            BARS, distPct),
-        900);
-    return false;
+    if(!pullbackFound)
+    {
+        double curPrice = (direction == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_BID)
+                                           : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+        double distPct  = MathAbs(curPrice - ema21[0]) / ema21[0] * 100.0;
+        LogThrottled("NO_PULLBACK",
+            StringFormat("[PULLBACK] Chua pullback ve EMA21 H1 trong %d bar. Khoang cach: %.2f%%",
+                BARS, distPct),
+            900);
+        return false;
+    }
+
+    // Xac nhan bounce: gia hien tai phai da quay ve dung phia EMA21
+    // (tranh vao lenh khi gia dang cat xuong EMA21 ma chua bounce)
+    double curBid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+    double curEMA = ema21[0]; // EMA21 cua bar H1 dang hinh thanh
+
+    if(direction == 1 && curBid < curEMA - curEMA * 0.001)
+    {
+        LogThrottled("PB_NOTBOUNCED",
+            StringFormat("[PULLBACK] Gia hien tai %.2f chua bounce ve tren EMA21=%.2f -> Bo qua", curBid, curEMA),
+            600);
+        return false;
+    }
+    if(direction == -1 && curBid > curEMA + curEMA * 0.001)
+    {
+        LogThrottled("PB_NOTBOUNCED",
+            StringFormat("[PULLBACK] Gia hien tai %.2f chua bounce ve duoi EMA21=%.2f -> Bo qua", curBid, curEMA),
+            600);
+        return false;
+    }
+
+    Print(StringFormat("[PULLBACK] OK Bar H1 -%d cham EMA21 va bounce ve %.2f | EMA21=%.2f",
+        pbBar + 1, curBid, curEMA));
+    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -893,27 +934,63 @@ bool CheckPullbackToEMA21H1(int direction)
 //+------------------------------------------------------------------+
 bool ConfirmM15Trend(int direction)
 {
+    // Doc 4 bar de kiem tra slope EMA21 M15
     double ema21[];
     ArraySetAsSeries(ema21, true);
-    if(CopyBuffer(g_m15EMA21Handle, 0, 1, 3, ema21) <= 0)
+    if(CopyBuffer(g_m15EMA21Handle, 0, 1, 4, ema21) <= 0)
     {
-        Print("[LỖI] Không đọc được EMA21 M15: ", GetLastError());
+        Print("[LOI] Khong doc duoc EMA21 M15: ", GetLastError());
         return false;
     }
 
-    double m15Close[];
+    double m15Close[], m15Open[];
     ArraySetAsSeries(m15Close, true);
+    ArraySetAsSeries(m15Open,  true);
     if(CopyClose(Symbol(), PERIOD_M15, 1, 3, m15Close) <= 0) return false;
+    if(CopyOpen (Symbol(), PERIOD_M15, 1, 3, m15Open)  <= 0) return false;
 
     double lastClose = m15Close[0];
     double lastEMA   = ema21[0];
-    bool   ok        = (direction == 1) ? (lastClose > lastEMA)
-                                        : (lastClose < lastEMA);
-    if(ok)
-        Print(StringFormat("[M15] Xác nhận %s | Đóng=%.2f %s EMA21=%.2f",
-            DirToStr(direction), lastClose,
-            (direction==1 ? ">" : "<"), lastEMA));
-    return ok;
+
+    // Kiem tra 1: Gia dong cua M15 phai dung phia EMA21
+    bool priceOK = (direction == 1) ? (lastClose > lastEMA)
+                                    : (lastClose < lastEMA);
+    if(!priceOK)
+    {
+        LogThrottled("M15_PRICE",
+            StringFormat("[M15] Gia dong cua %.2f khong cung phia EMA21=%.2f", lastClose, lastEMA),
+            600);
+        return false;
+    }
+
+    // Kiem tra 2: EMA21 M15 phai co slope dung chieu
+    // So sanh EMA21 hien tai voi 3 bar truoc (tranh M15 di ngang)
+    bool slopeOK = (direction == 1) ? (ema21[0] > ema21[3])
+                                    : (ema21[0] < ema21[3]);
+    if(!slopeOK)
+    {
+        LogThrottled("M15_SLOPE",
+            StringFormat("[M15] EMA21 slope khong hop le: %.2f -> %.2f", ema21[3], ema21[0]),
+            600);
+        return false;
+    }
+
+    // Kiem tra 3: Than nen M15 vua dong phai co do lon toi thieu (tranh doji)
+    double body     = MathAbs(m15Close[0] - m15Open[0]);
+    double minBody  = SymbolInfoDouble(Symbol(), SYMBOL_POINT) * 10; // toi thieu 10 points
+    if(body < minBody)
+    {
+        LogThrottled("M15_DOJI",
+            StringFormat("[M15] Nen doji (body=%.3f < %.3f) -> Bo qua", body, minBody),
+            600);
+        return false;
+    }
+
+    Print(StringFormat("[M15] OK %s | Dong=%.2f %s EMA21=%.2f | Slope: %.2f->%.2f | Body=%.3f",
+        DirToStr(direction), lastClose,
+        (direction==1 ? ">" : "<"), lastEMA,
+        ema21[3], ema21[0], body));
+    return true;
 }
 
 //+------------------------------------------------------------------+
@@ -1145,7 +1222,8 @@ bool PlaceOrder1(int direction, double sl, double tp1, double tp2)
     g_tp2              = tp2;
     g_tp1Reached       = false;
     g_order2EverOpened = false;
-    g_ticket1          = res.deal;  // deal ticket; position ticket sẽ cập nhật qua OnTradeTransaction/SyncPositionState
+    g_ticket1          = res.deal;  // deal ticket; position ticket se cap nhat qua OnTradeTransaction/SyncPositionState
+    g_tradeOpenTime    = TimeCurrent(); // Luu thoi gian mo lenh de time-based exit
     g_dailyTradeCount++;
 
     Print("+=========== LỆNH 1 MỞ THÀNH CÔNG ===========+");
@@ -1240,6 +1318,19 @@ void ManageOpenPositions()
                                         : SymbolInfoDouble(Symbol(), SYMBOL_ASK);
     double slDist   = MathAbs(g_entry1 - g_sl); // Khoảng cách SL tính bằng giá
 
+    // --- TIME-BASED EXIT: Tu dong dong neu qua X bars H1 ma chua dat TP1 ---
+    // Lenh ket ma qua lau ma khong chuyen bien = sai chieu, nen cat lo som
+    if(InpMaxHoldBarsH1 > 0 && !g_tp1Reached && g_tradeOpenTime > 0)
+    {
+        int secondsPerBar = PeriodSeconds(PERIOD_H1);
+        datetime expireTime = g_tradeOpenTime + (datetime)(InpMaxHoldBarsH1 * secondsPerBar);
+        if(TimeCurrent() >= expireTime)
+        {
+            CloseAllPositions(StringFormat("Het han %d bars H1 chua dat TP1", InpMaxHoldBarsH1));
+            return;
+        }
+    }
+
     if(g_hasOrder1 && g_hasOrder2)
     {
         // Có 2 lệnh: ưu tiên xử lý cơ chế 2 lệnh
@@ -1277,30 +1368,52 @@ void ManageSingleOrderTrailing(double curPrice)
 
     if(!g_tp1Reached)
     {
-        // --- Giai đoạn 1: Chờ TP1 ---
+        // --- Giai doan 1: Cho TP1 ---
         bool hitTP1 = (g_tradeDir == 1) ? (curPrice >= g_tp1)
                                         : (curPrice <= g_tp1);
         if(hitTP1)
         {
             g_tp1Reached = true;
 
-            // Dời SL về Entry + 1 giá (Buy) hoặc Entry - 1 giá (Sell)
+            // PARTIAL CLOSE: Neu InpPartialCloseTP1=true, dong 50%% khoi luong L1
+            // Muc dich: Lock in loi nhuan RR 1:2 tren phan lon khi thi truong chua du manh chay den TP2
+            if(InpPartialCloseTP1)
+            {
+                double halfVol = NormalizeDouble(InpVolume1 * 0.5, 2);
+                double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+                double minLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+                halfVol = MathFloor(halfVol / lotStep) * lotStep;
+
+                if(halfVol >= minLot)
+                {
+                    Print(StringFormat("[TRAILING] TP1 dat (%.2f) -> Dong 50%% = %.2f lot",
+                        g_tp1, halfVol));
+                    ClosePartialPosition(g_ticket1, halfVol);
+                }
+                else
+                {
+                    // Khoi luong qua nho de dong 1 nua -> dong toan bo
+                    Print(StringFormat("[TRAILING] TP1 dat, khoi luong nho -> Dong het %.2f lot", InpVolume1));
+                    ClosePositionByTicket(g_ticket1);
+                    return;
+                }
+            }
+
+            // Doi SL ve Entry + 1 gia (Buy) hoac Entry - 1 gia (Sell) de dam bao hoa von
             double newSL = (g_tradeDir == 1)
-                           ? NormalizeDouble(g_entry1 + 1.0, digits) // +1 giá
-                           : NormalizeDouble(g_entry1 - 1.0, digits); // -1 giá
+                           ? NormalizeDouble(g_entry1 + 1.0, digits)
+                           : NormalizeDouble(g_entry1 - 1.0, digits);
 
             if(ModifyPositionSL(g_ticket1, newSL, true))
-                Print(StringFormat("[TRAILING] OK TP1 đạt (%.2f) -> SL dời về Entry+1giá=%.2f",
-                    g_tp1, newSL));
+                Print(StringFormat("[TRAILING] OK TP1 dat -> SL doi ve Entry+1gia=%.2f", newSL));
         }
     }
     else
     {
-        // --- Giai đoạn 2: Trailing từ TP1 -> TP2 ---
-        // Khoảng cách từ TP1 đến TP2
+        // --- Giai doan 2: Trailing tu TP1 -> TP2 (phan con lai sau partial close) ---
         double tp1ToTp2 = MathAbs(g_tp2 - g_tp1);
 
-        // Mốc 50% giữa TP1 và TP2
+        // Moc 50%% giua TP1 va TP2 -> doi SL len TP1 de lock RR 1:2 tren phan con lai
         double midPoint = (g_tradeDir == 1) ? g_tp1 + tp1ToTp2 * 0.5
                                             : g_tp1 - tp1ToTp2 * 0.5;
 
@@ -1308,12 +1421,11 @@ void ManageSingleOrderTrailing(double curPrice)
                                         : (curPrice <= midPoint);
         if(hitMid)
         {
-            // Dời SL lên TP1 (lock in lợi nhuận RR 1:2)
-            double newSL = NormalizeDouble(g_tp1, digits);
+            double newSL  = NormalizeDouble(g_tp1, digits);
             bool   better = (g_tradeDir == 1) ? (newSL > curSL) : (newSL < curSL);
 
             if(better && ModifyPositionSL(g_ticket1, newSL, true))
-                Print(StringFormat("[TRAILING] OK 50%%TP2 đạt (%.2f) -> SL dời lên TP1=%.2f",
+                Print(StringFormat("[TRAILING] OK 50%%TP2 dat (%.2f) -> SL doi len TP1=%.2f",
                     midPoint, g_tp1));
         }
     }
@@ -1325,11 +1437,9 @@ void ManageSingleOrderTrailing(double curPrice)
 //+------------------------------------------------------------------+
 void CheckAndTriggerOrder2(double curPrice, double slDist)
 {
-    // Trigger L2 o 85% cua SL distance:
-    // - Chi mo khi gia gan cham SL (con 15% duong den SL)
-    // - Dam bao L1 co du co hoi hoat dong truoc khi co L2
-    // - Khi L1 on dinh (win rate tot), co the giam ve 70%
-    double triggerDist = slDist * 0.85;
+    // Trigger L2 tai InpL2TriggerPct cua SL distance (mac dinh 70%)
+    // Vi du: SL = 20 gia, InpL2TriggerPct=0.70 -> L2 mo khi gia di nguoc 14 gia
+    double triggerDist = slDist * InpL2TriggerPct;
     bool   trigger     = false;
 
     if(g_tradeDir == 1  && curPrice <= g_entry1 - triggerDist) trigger = true;
@@ -1337,8 +1447,8 @@ void CheckAndTriggerOrder2(double curPrice, double slDist)
 
     if(trigger)
     {
-        Print(StringFormat("[L2] Kích hoạt! Giá=%.2f | Entry=%.2f | 70%%SL=%.2f giá (SL=%.2f)",
-            curPrice, g_entry1, triggerDist, g_sl));
+        Print(StringFormat("[L2] Kich hoat! Gia=%.2f | Entry=%.2f | %.0f%%SL=%.2f gia (SL=%.2f)",
+            curPrice, g_entry1, InpL2TriggerPct*100, triggerDist, g_sl));
         PlaceOrder2();
     }
 }
@@ -1431,6 +1541,75 @@ bool ModifyPositionSL(ulong ticket, double newSL, bool onlyImprove)
         return false;
     }
     return true;
+}
+
+//+------------------------------------------------------------------+
+//| DONG MOT PHAN VI THE (Partial Close)                            |
+//| Dung de dong 50%% L1 tai TP1 de lock profit                    |
+//+------------------------------------------------------------------+
+bool ClosePartialPosition(ulong ticket, double closeVol)
+{
+    if(ticket == 0 || !PositionSelectByTicket(ticket)) return false;
+
+    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+    double curVol = PositionGetDouble(POSITION_VOLUME);
+
+    // Dam bao khong dong nhieu hon khoi luong hien tai
+    if(closeVol <= 0) return false;
+    if(closeVol > curVol) closeVol = curVol;
+
+    // Lam tron theo step lot (tranh loi invalid volume)
+    double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+    double minLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+    closeVol = MathFloor(closeVol / lotStep) * lotStep;
+    if(closeVol < minLot)
+    {
+        Print(StringFormat("[PARTIAL] Khoi luong dong (%.2f) < min lot (%.2f) -> Dong het", closeVol, minLot));
+        closeVol = curVol; // Dong het neu khong du min lot
+    }
+    closeVol = NormalizeDouble(closeVol, 2);
+
+    MqlTradeRequest req = {};
+    MqlTradeResult  res = {};
+
+    req.action       = TRADE_ACTION_DEAL;
+    req.symbol       = Symbol();
+    req.volume       = closeVol;
+    req.position     = ticket;
+    req.magic        = InpMagicNumber;
+    req.deviation    = InpSlippage;
+    req.type_filling = GetFillType();
+
+    if(posType == POSITION_TYPE_BUY)
+    {
+        req.type  = ORDER_TYPE_SELL;
+        req.price = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+    }
+    else
+    {
+        req.type  = ORDER_TYPE_BUY;
+        req.price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+    }
+
+    if(!OrderSend(req, res))
+    {
+        Print(StringFormat("[LOI PARTIAL] ticket=%llu vol=%.2f retcode=%d | %s",
+            ticket, closeVol, res.retcode, res.comment));
+        return false;
+    }
+
+    Print(StringFormat("[PARTIAL] OK dong %.2f lot tu ticket=%llu", closeVol, ticket));
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| DONG TOAN BO CHUOI LENH KHI HET HAN TIME-BASED EXIT             |
+//+------------------------------------------------------------------+
+void CloseAllPositions(const string reason)
+{
+    Print(StringFormat("[TIME EXIT] %s -> Dong tat ca lenh", reason));
+    if(g_hasOrder1 && g_ticket1 != 0) ClosePositionByTicket(g_ticket1);
+    if(g_hasOrder2 && g_ticket2 != 0) ClosePositionByTicket(g_ticket2);
 }
 
 //+------------------------------------------------------------------+
