@@ -5,7 +5,7 @@
 //| Cặp giao dịch  : XAUUSD                                         |
 //| Khung phân tích : H4, H1, M15, M5                               |
 //| Khung entry     : M5                                             |
-//| Đơn vị giá      : 1 giá = $1 (ví dụ 1200→1210 = 10 giá)        |
+//| Đơn vị giá      : 1 giá = $1 (ví dụ 1200->1210 = 10 giá)        |
 //+------------------------------------------------------------------+
 #property copyright   "XAUUSD Multi-TF EA v1.0"
 #property link        ""
@@ -130,19 +130,19 @@ int OnInit()
     g_currentDay = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
 
     //--- In thông tin cài đặt khi khởi động
-    Print("╔══════════════════════════════════════════════════╗");
-    Print("║     XAUUSD Multi-Timeframe Expert Advisor v1.0   ║");
-    Print("╠══════════════════════════════════════════════════╣");
-    PrintFormat("║ Symbol    : %-36s ║", sym);
-    PrintFormat("║ Magic     : %-36d ║", InpMagicNumber);
-    PrintFormat("║ EMA       : Fast=%d  Slow=%d                     ║", InpEMAFast, InpEMASlow);
-    PrintFormat("║ ADX       : Period=%d  Min=%.0f  Max=%.0f            ║", InpADXPeriod, InpADXMin, InpADXMax);
-    PrintFormat("║ ATR M5    : %d                                    ║", InpATRPeriod);
-    PrintFormat("║ Max SL    : $%.0f  Max Spread: $%.0f               ║", InpMaxSLGia, InpMaxSpreadGia);
-    PrintFormat("║ Volume    : L1=%.2f lot  L2=%.2f lot            ║", InpVolume1, InpVolume2);
-    PrintFormat("║ Giới hạn  : %d lệnh/ngày, thua tối đa %d lệnh   ║", InpMaxDailyTrades, InpMaxConsecLoss);
-    Print("║ Session   : 07:00 - 16:00 GMT (14:00-23:00 VN)  ║");
-    Print("╚══════════════════════════════════════════════════╝");
+    Print("+==================================================+");
+    Print("|     XAUUSD Multi-Timeframe Expert Advisor v1.0   |");
+    Print("+==================================================|");
+    PrintFormat("| Symbol    : %-36s |", sym);
+    PrintFormat("| Magic     : %-36d |", InpMagicNumber);
+    PrintFormat("| EMA       : Fast=%d  Slow=%d                     |", InpEMAFast, InpEMASlow);
+    PrintFormat("| ADX       : Period=%d  Min=%.0f  Max=%.0f            |", InpADXPeriod, InpADXMin, InpADXMax);
+    PrintFormat("| ATR M5    : %d                                    |", InpATRPeriod);
+    PrintFormat("| Max SL    : $%.0f  Max Spread: $%.0f               |", InpMaxSLGia, InpMaxSpreadGia);
+    PrintFormat("| Volume    : L1=%.2f lot  L2=%.2f lot            |", InpVolume1, InpVolume2);
+    PrintFormat("| Giới hạn  : %d lệnh/ngày, thua tối đa %d lệnh   |", InpMaxDailyTrades, InpMaxConsecLoss);
+    Print("| Session   : 07:00 - 16:00 GMT (14:00-23:00 VN)  |");
+    Print("+==================================================+");
 
     return INIT_SUCCEEDED;
 }
@@ -186,7 +186,7 @@ void OnTick()
     //--- Bước 3: Đồng bộ trạng thái lệnh với thực tế (phát hiện lệnh đã đóng)
     SyncPositionState();
 
-    //--- Bước 4: Nếu đang có lệnh mở → quản lý trailing/lệnh 2, không mở thêm
+    //--- Bước 4: Nếu đang có lệnh mở -> quản lý trailing/lệnh 2, không mở thêm
     if(g_hasOrder1 || g_hasOrder2)
     {
         ManageOpenPositions();
@@ -219,12 +219,12 @@ void OnTick()
     int h1Dir = GetH1Signal();
     if(h1Dir == 0) return;
 
-    //--- Bước 10: Kiểm tra mâu thuẫn H4/H1 → không vào lệnh
+    //--- Bước 10: Kiểm tra mâu thuẫn H4/H1 -> không vào lệnh
     if(h4Dir != h1Dir)
     {
         LogThrottled("CONFLICT",
             "[LỌC] H4(" + DirToStr(h4Dir) + ") mâu thuẫn H1(" +
-            DirToStr(h1Dir) + ") → Bỏ qua",
+            DirToStr(h1Dir) + ") -> Bỏ qua",
             1800);
         return;
     }
@@ -234,7 +234,7 @@ void OnTick()
     //--- Bước 11: Giá phải pullback về EMA21 H1 (không đuổi giá)
     if(!CheckPullbackToEMA21H1(signalDir))
     {
-        LogThrottled("PULLBACK", "[LỌC] Chưa pullback về EMA21 H1 → Không đuổi giá", 900);
+        LogThrottled("PULLBACK", "[LỌC] Chưa pullback về EMA21 H1 -> Không đuổi giá", 900);
         return;
     }
 
@@ -336,12 +336,12 @@ void CheckAndResetDaily()
 
     if(todayStart > g_currentDay)
     {
-        Print("══════════════════════════════════════════════");
+        Print("==============================================");
         Print("[RESET NGÀY] Ngày mới: ", TimeToString(todayStart, TIME_DATE));
         PrintFormat("[RESET NGÀY] Hôm qua: %d lệnh | Bot trạng thái: %s",
             g_dailyTradeCount,
             g_botPausedToday ? "ĐÃ DỪNG" : "HOẠT ĐỘNG");
-        Print("══════════════════════════════════════════════");
+        Print("==============================================");
 
         // Reset tất cả bộ đếm hàng ngày
         g_dailyTradeCount  = 0;
@@ -406,7 +406,7 @@ void SyncPositionState()
         // Khi lệnh 2 đóng qua TP (tại entry lệnh 1), dời SL lệnh 1 về entry
         if(g_hasOrder1 && foundOrder1 && g_ticket1 != 0)
         {
-            Print("[TRAILING] Lệnh 2 đóng → Dời SL lệnh 1 về entry: ",
+            Print("[TRAILING] Lệnh 2 đóng -> Dời SL lệnh 1 về entry: ",
                   DoubleToString(g_entry1, 2));
             ModifyPositionSL(g_ticket1, g_entry1, false);
         }
@@ -455,7 +455,7 @@ void CheckAndUpdateLossStreak()
         if(pnl < 0)
             consecLoss++;  // Lệnh thua, tiếp tục đếm
         else
-            break;         // Gặp lệnh thắng → chuỗi thua đã bị ngắt
+            break;         // Gặp lệnh thắng -> chuỗi thua đã bị ngắt
     }
 
     PrintFormat("[THỐNG KÊ] Chuỗi lệnh thua liên tiếp hôm nay: %d / %d",
@@ -465,17 +465,17 @@ void CheckAndUpdateLossStreak()
     if(consecLoss >= InpMaxConsecLoss)
     {
         g_botPausedToday = true;
-        Print("══════════════════════════════════════════════");
+        Print("==============================================");
         PrintFormat("[DỪNG BOT] Đã thua %d lệnh liên tiếp!", consecLoss);
         Print("[DỪNG BOT] Bot dừng giao dịch. Sẽ tự động tiếp tục vào ngày mai 00:00 GMT.");
-        Print("══════════════════════════════════════════════");
+        Print("==============================================");
     }
 }
 
 
 //+------------------------------------------------------------------+
-//| BỘ LỌC SESSION: Chỉ giao dịch 7h–16h GMT                        |
-//| = 14h–23h giờ Việt Nam                                           |
+//| BỘ LỌC SESSION: Chỉ giao dịch 7h-16h GMT                        |
+//| = 14h-23h giờ Việt Nam                                           |
 //+------------------------------------------------------------------+
 bool FilterSession()
 {
@@ -486,7 +486,7 @@ bool FilterSession()
 
     if(!inSession)
         LogThrottled("SESSION",
-            StringFormat("[LỌC SESSION] Ngoài giờ GD | Hiện: %02d:%02d GMT | Cho phép: 07:00–16:00 GMT",
+            StringFormat("[LỌC SESSION] Ngoài giờ GD | Hiện: %02d:%02d GMT | Cho phép: 07:00-16:00 GMT",
                 gmt.hour, gmt.min),
             3600);
 
@@ -502,13 +502,13 @@ bool FilterSpread()
     double point       = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
     long   spreadPts   = SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
     // Đổi spread từ points sang đơn vị giá (price unit)
-    // VD: XAUUSD point=0.01, spread=30pts → 30*0.01 = 0.30 giá
+    // VD: XAUUSD point=0.01, spread=30pts -> 30*0.01 = 0.30 giá
     double spreadGia   = spreadPts * point;
 
     if(spreadGia > InpMaxSpreadGia)
     {
         LogThrottled("SPREAD",
-            StringFormat("[LỌC SPREAD] Spread: %.2f giá | Max: %.0f giá → Chờ spread hẹp hơn",
+            StringFormat("[LỌC SPREAD] Spread: %.2f giá | Max: %.0f giá -> Chờ spread hẹp hơn",
                 spreadGia, InpMaxSpreadGia),
             60);
         return false;
@@ -522,59 +522,59 @@ bool FilterSpread()
 //| Ghi chú: Phiên bản này dùng lịch xấp xỉ (không cần API).       |
 //|          Nên kiểm tra thủ công lịch kinh tế mỗi tuần.           |
 //+------------------------------------------------------------------+
+// Helper: true khi đang trong cửa sổ ±30 phút quanh newsHour:newsMin
+bool IsInNewsWindow(int totalMin, int newsHour, int newsMin)
+{
+    int center = newsHour * 60 + newsMin;
+    return (totalMin >= center - 30 && totalMin <= center + 30);
+}
+
 bool FilterNews()
 {
     MqlDateTime gmt;
     TimeToStruct(TimeCurrent(), gmt);
 
-    int hour       = gmt.hour;
-    int minute     = gmt.min;
-    int dow        = gmt.day_of_week;  // 0=CN 1=T2 2=T3 3=T4 4=T5 5=T6 6=T7
-    int dom        = gmt.day;          // Ngày trong tháng
-    int mon        = gmt.mon;
-    int totalMin   = hour * 60 + minute;
+    int dow      = gmt.day_of_week;
+    int dom      = gmt.day;
+    int mon      = gmt.mon;
+    int totalMin = gmt.hour * 60 + gmt.min;
 
-    // Helper macro: kiểm tra đang trong ±30 phút quanh tin
-    #define IN_NEWS(h, m) (totalMin >= ((h)*60+(m)-30) && totalMin <= ((h)*60+(m)+30))
-
-    // --- NFP: Thứ 6 ĐẦU TIÊN của mỗi tháng, 13:30 GMT ---
-    if(dow == 5 && dom <= 7 && IN_NEWS(13, 30))
+    // --- NFP: Thu 6 dau tien cua thang, 13:30 GMT ---
+    if(dow == 5 && dom <= 7 && IsInNewsWindow(totalMin, 13, 30))
     {
-        LogThrottled("NFP", "[TIN TỨC] Vùng NFP (T6 đầu tháng 13:30 GMT ±30p) → Dừng GD", 1800);
+        LogThrottled("NFP", "[TIN TUC] Vung NFP (Thu6 dau thang 13:30 GMT +-30p) -> Dung GD", 1800);
         return false;
     }
 
-    // --- CPI / PPI: Thứ 3 hoặc Thứ 4, tuần 2–3 tháng, 13:30 GMT ---
-    if((dow == 2 || dow == 3) && dom >= 8 && dom <= 21 && IN_NEWS(13, 30))
+    // --- CPI / PPI: Thu 3 hoac Thu 4, tuan 2-3 thang, 13:30 GMT ---
+    if((dow == 2 || dow == 3) && dom >= 8 && dom <= 21 && IsInNewsWindow(totalMin, 13, 30))
     {
-        LogThrottled("CPI", "[TIN TỨC] Vùng CPI/PPI (T3/T4 tuần 2-3, 13:30 GMT ±30p) → Dừng GD", 1800);
+        LogThrottled("CPI", "[TIN TUC] Vung CPI/PPI (Thu3/4 tuan 2-3, 13:30 GMT +-30p) -> Dung GD", 1800);
         return false;
     }
 
-    // --- FED RATE DECISION: Thứ 4, tuần 3–5, 19:00 GMT ---
-    // Fed họp ~8 lần/năm; chặn rộng để an toàn
-    if(dow == 3 && dom >= 15 && IN_NEWS(19, 0))
+    // --- FED RATE DECISION: Thu 4, tuan 3-5, 19:00 GMT ---
+    if(dow == 3 && dom >= 15 && IsInNewsWindow(totalMin, 19, 0))
     {
-        LogThrottled("FED", "[TIN TỨC] Vùng Fed Rate Decision (T4 tuần 3+, 19:00 GMT ±30p) → Dừng GD", 1800);
+        LogThrottled("FED", "[TIN TUC] Vung Fed Rate Decision (Thu4 tuan 3+, 19:00 GMT +-30p) -> Dung GD", 1800);
         return false;
     }
 
-    // --- GDP: Thứ 4/5 cuối quý (tháng 1,4,7,10), 13:30 GMT ---
-    if((mon==1||mon==4||mon==7||mon==10) && (dow==4||dow==5) && dom >= 22 && IN_NEWS(13, 30))
+    // --- GDP: Thu 4/5 cuoi quy (thang 1,4,7,10), 13:30 GMT ---
+    if((mon==1||mon==4||mon==7||mon==10) && (dow==4||dow==5) && dom>=22 && IsInNewsWindow(totalMin,13,30))
     {
-        LogThrottled("GDP", "[TIN TỨC] Vùng GDP cuối quý (13:30 GMT ±30p) → Dừng GD", 1800);
+        LogThrottled("GDP", "[TIN TUC] Vung GDP cuoi quy (13:30 GMT +-30p) -> Dung GD", 1800);
         return false;
     }
 
-    #undef IN_NEWS
     return true;
 }
 
 
 //+------------------------------------------------------------------+
 //| PHÂN TÍCH H4: Xác định xu hướng chính                           |
-//| Logic: Giá đóng cửa H4 > EMA21 AND EMA21 đang dốc lên → Buy   |
-//|        Giá đóng cửa H4 < EMA21 AND EMA21 đang dốc xuống → Sell |
+//| Logic: Giá đóng cửa H4 > EMA21 AND EMA21 đang dốc lên -> Buy   |
+//|        Giá đóng cửa H4 < EMA21 AND EMA21 đang dốc xuống -> Sell |
 //| Yêu cầu EMA21 có slope rõ ràng để tránh thị trường ngang       |
 //| Trả về: 1=Bullish, -1=Bearish, 0=Không xác định                 |
 //+------------------------------------------------------------------+
@@ -610,7 +610,7 @@ int GetH4Trend()
     if(lastClose > lastEMA21 && ema21Rising)
     {
         LogThrottled("H4_BULL",
-            StringFormat("[H4] BUY | Đóng=%.2f > EMA21=%.2f | EMA21 slope↑ (%.2f→%.2f)",
+            StringFormat("[H4] BUY | Đóng=%.2f > EMA21=%.2f | EMA21 slope^ (%.2f->%.2f)",
                 lastClose, lastEMA21, ema21[2], ema21[0]),
             3600);
         return 1;
@@ -620,7 +620,7 @@ int GetH4Trend()
     if(lastClose < lastEMA21 && ema21Falling)
     {
         LogThrottled("H4_BEAR",
-            StringFormat("[H4] SELL | Đóng=%.2f < EMA21=%.2f | EMA21 slope↓ (%.2f→%.2f)",
+            StringFormat("[H4] SELL | Đóng=%.2f < EMA21=%.2f | EMA21 slopev (%.2f->%.2f)",
                 lastClose, lastEMA21, ema21[2], ema21[0]),
             3600);
         return -1;
@@ -628,7 +628,7 @@ int GetH4Trend()
 
     // Không đủ điều kiện: giá và slope mâu thuẫn (thị trường ngang/đảo chiều)
     LogThrottled("H4_FLAT",
-        StringFormat("[H4] Xu hướng không rõ | Đóng=%.2f EMA21=%.2f slope:(%.2f→%.2f)",
+        StringFormat("[H4] Xu hướng không rõ | Đóng=%.2f EMA21=%.2f slope:(%.2f->%.2f)",
             lastClose, lastEMA21, ema21[2], ema21[0]),
         3600);
     return 0;
@@ -639,7 +639,7 @@ int GetH4Trend()
 //| Logic:                                                            |
 //|  - EMA8 cắt EMA21 trong 2 bars H1 gần nhất (tín hiệu còn mới)  |
 //|  - ADX > InpADXMin (xu hướng đủ mạnh)                           |
-//|  - ADX ≤ InpADXMax (không kiệt sức)                             |
+//|  - ADX <= InpADXMax (không kiệt sức)                             |
 //|  - +DI > -DI cho Buy | -DI > +DI cho Sell (định hướng momentum) |
 //| Trả về: 1=Buy signal, -1=Sell signal, 0=Không tín hiệu          |
 //+------------------------------------------------------------------+
@@ -679,14 +679,14 @@ int GetH1Signal()
     if(adxVal <= InpADXMin)
     {
         LogThrottled("ADX_LOW",
-            StringFormat("[H1 ADX] %.1f ≤ %.0f → Thị trường đi ngang, bỏ qua", adxVal, InpADXMin),
+            StringFormat("[H1 ADX] %.1f <= %.0f -> Thị trường đi ngang, bỏ qua", adxVal, InpADXMin),
             900);
         return 0;
     }
     if(adxVal > InpADXMax)
     {
         LogThrottled("ADX_HIGH",
-            StringFormat("[H1 ADX] %.1f > %.0f → Xu hướng kiệt sức, bỏ qua", adxVal, InpADXMax),
+            StringFormat("[H1 ADX] %.1f > %.0f -> Xu hướng kiệt sức, bỏ qua", adxVal, InpADXMax),
             900);
         return 0;
     }
@@ -698,7 +698,7 @@ int GetH1Signal()
 
     if(!bullMomentum && !bearMomentum)
     {
-        LogThrottled("DI_EQUAL", "[H1 DI] +DI = -DI → Không rõ chiều, bỏ qua", 900);
+        LogThrottled("DI_EQUAL", "[H1 DI] +DI = -DI -> Không rõ chiều, bỏ qua", 900);
         return 0;
     }
 
@@ -760,14 +760,14 @@ bool CheckPullbackToEMA21H1(int direction)
     for(int i = 0; i < BARS; i++)
     {
         double ema     = ema21[i];
-        // Dung sai 0.15% của EMA (≈ $3 khi vàng ở $2000)
+        // Dung sai 0.15% của EMA (~= $3 khi vàng ở $2000)
         double tol     = ema * 0.0015;
 
         if(direction == 1) // Buy: Low phải chạm về EMA21 từ trên
         {
             if(h1Low[i] <= ema + tol) // Low chạm hoặc xuyên dưới EMA21
             {
-                Print(StringFormat("[PULLBACK] Bar H1 -%d: Low=%.2f ≤ EMA21=%.2f+tol → OK",
+                Print(StringFormat("[PULLBACK] Bar H1 -%d: Low=%.2f <= EMA21=%.2f+tol -> OK",
                     i+1, h1Low[i], ema));
                 return true;
             }
@@ -776,7 +776,7 @@ bool CheckPullbackToEMA21H1(int direction)
         {
             if(h1High[i] >= ema - tol) // High chạm hoặc xuyên trên EMA21
             {
-                Print(StringFormat("[PULLBACK] Bar H1 -%d: High=%.2f ≥ EMA21=%.2f-tol → OK",
+                Print(StringFormat("[PULLBACK] Bar H1 -%d: High=%.2f >= EMA21=%.2f-tol -> OK",
                     i+1, h1High[i], ema));
                 return true;
             }
@@ -848,12 +848,12 @@ bool ConfirmM5ClosedCandle(int direction)
 
     if(body1 < minBody)
     {
-        Print(StringFormat("[M5] Nến 1 doji (body=%.3f < %.3f) → Bỏ qua", body1, minBody));
+        Print(StringFormat("[M5] Nến 1 doji (body=%.3f < %.3f) -> Bỏ qua", body1, minBody));
         return false;
     }
     if(body2 < minBody)
     {
-        Print(StringFormat("[M5] Nến 2 doji (body=%.3f < %.3f) → Bỏ qua", body2, minBody));
+        Print(StringFormat("[M5] Nến 2 doji (body=%.3f < %.3f) -> Bỏ qua", body2, minBody));
         return false;
     }
 
@@ -877,7 +877,7 @@ bool ConfirmM5ClosedCandle(int direction)
         return true;
     }
 
-    Print(StringFormat("[M5] 2 nến không cùng chiều %s → Bỏ qua", DirToStr(direction)));
+    Print(StringFormat("[M5] 2 nến không cùng chiều %s -> Bỏ qua", DirToStr(direction)));
     return false;
 }
 
@@ -924,7 +924,7 @@ bool CalculateSLTP(int  direction,
     double structLevel = 0.0;
     bool   swingFound  = false;
 
-    if(direction == 1) // Buy → tìm Swing Low gần nhất
+    if(direction == 1) // Buy -> tìm Swing Low gần nhất
     {
         // Swing Low: bar [i] có Low thấp hơn cả [i-1] và [i+1]
         for(int i = 1; i < SWING_BARS - 1; i++)
@@ -944,7 +944,7 @@ bool CalculateSLTP(int  direction,
         }
         sl = structLevel - atrVal * 1.5; // Buffer bên dưới swing low (1.5×ATR tránh noise)
     }
-    else // Sell → tìm Swing High gần nhất
+    else // Sell -> tìm Swing High gần nhất
     {
         for(int i = 1; i < SWING_BARS - 1; i++)
         {
@@ -967,7 +967,7 @@ bool CalculateSLTP(int  direction,
     sl = NormalizeDouble(sl, digits);
 
     // --- Kiểm tra khoảng cách SL ---
-    // 1 giá = 1.0 price unit (XAUUSD: 1200→1210 = 10 giá)
+    // 1 giá = 1.0 price unit (XAUUSD: 1200->1210 = 10 giá)
     double slDist = MathAbs(entry - sl); // Khoảng cách tính bằng giá
 
     Print(StringFormat("[PLAN] %s | Entry=%.2f | Structure=%.2f | ATR=%.3f | SL=%.2f | SL_dist=%.2f giá ($%.2f)",
@@ -975,14 +975,14 @@ bool CalculateSLTP(int  direction,
 
     if(slDist > InpMaxSLGia)
     {
-        Print(StringFormat("[LỌC] SL quá xa: %.2f giá > max %.0f giá → Bỏ qua lệnh",
+        Print(StringFormat("[LỌC] SL quá xa: %.2f giá > max %.0f giá -> Bỏ qua lệnh",
             slDist, InpMaxSLGia));
         return false;
     }
 
-    if(slDist < point * 5) // SL quá nhỏ (< 5 points) → bất thường
+    if(slDist < point * 5) // SL quá nhỏ (< 5 points) -> bất thường
     {
-        Print(StringFormat("[LỌC] SL quá nhỏ: %.4f → Bỏ qua lệnh", slDist));
+        Print(StringFormat("[LỌC] SL quá nhỏ: %.4f -> Bỏ qua lệnh", slDist));
         return false;
     }
 
@@ -1055,21 +1055,21 @@ bool PlaceOrder1(int direction, double sl, double tp1, double tp2)
     g_ticket1          = res.deal;  // deal ticket; position ticket sẽ cập nhật qua OnTradeTransaction/SyncPositionState
     g_dailyTradeCount++;
 
-    Print("╔═══════════ LỆNH 1 MỞ THÀNH CÔNG ═══════════╗");
-    Print(StringFormat("║ Chiều  : %-38s ║", DirToStr(direction)));
-    Print(StringFormat("║ Entry  : %-38.2f ║", g_entry1));
-    Print(StringFormat("║ SL     : %-38.2f ║", sl));
-    Print(StringFormat("║ TP1    : %-33.2f (1:2) ║", tp1));
-    Print(StringFormat("║ TP2    : %-33.2f (1:3) ║", tp2));
-    Print(StringFormat("║ Volume : %-35.2f lot ║", InpVolume1));
-    Print(StringFormat("║ Lệnh hôm nay: %d / %d                          ║",
+    Print("+=========== LỆNH 1 MỞ THÀNH CÔNG ===========+");
+    Print(StringFormat("| Chiều  : %-38s |", DirToStr(direction)));
+    Print(StringFormat("| Entry  : %-38.2f |", g_entry1));
+    Print(StringFormat("| SL     : %-38.2f |", sl));
+    Print(StringFormat("| TP1    : %-33.2f (1:2) |", tp1));
+    Print(StringFormat("| TP2    : %-33.2f (1:3) |", tp2));
+    Print(StringFormat("| Volume : %-35.2f lot |", InpVolume1));
+    Print(StringFormat("| Lệnh hôm nay: %d / %d                          |",
         g_dailyTradeCount, InpMaxDailyTrades));
-    Print("╚══════════════════════════════════════════════╝");
+    Print("+==============================================+");
     return true;
 }
 
 //+------------------------------------------------------------------+
-//| MỞ LỆNH 2 (Averaging – Chỉ mở 1 lần duy nhất)                  |
+//| MỞ LỆNH 2 (Averaging - Chỉ mở 1 lần duy nhất)                  |
 //| Điều kiện: Lệnh 1 lỗ đến 50% SL distance                       |
 //| SL = giống lệnh 1 | TP = tại giá entry lệnh 1                   |
 //+------------------------------------------------------------------+
@@ -1126,13 +1126,13 @@ void PlaceOrder2()
     g_ticket2          = res.deal;  // position ticket sẽ cập nhật qua OnTradeTransaction/SyncPositionState
     g_dailyTradeCount++;
 
-    Print("╔═══════════ LỆNH 2 MỞ THÀNH CÔNG ═══════════╗");
-    Print(StringFormat("║ Chiều  : %-38s ║", DirToStr(g_tradeDir)));
-    Print(StringFormat("║ Entry  : %-38.2f ║", req.price));
-    Print(StringFormat("║ SL     : %-30.2f (= SL lệnh 1) ║", g_sl));
-    Print(StringFormat("║ TP     : %-28.2f (entry lệnh 1) ║", g_entry1));
-    Print(StringFormat("║ Volume : %-35.2f lot ║", InpVolume2));
-    Print("╚══════════════════════════════════════════════╝");
+    Print("+=========== LỆNH 2 MỞ THÀNH CÔNG ===========+");
+    Print(StringFormat("| Chiều  : %-38s |", DirToStr(g_tradeDir)));
+    Print(StringFormat("| Entry  : %-38.2f |", req.price));
+    Print(StringFormat("| SL     : %-30.2f (= SL lệnh 1) |", g_sl));
+    Print(StringFormat("| TP     : %-28.2f (entry lệnh 1) |", g_entry1));
+    Print(StringFormat("| Volume : %-35.2f lot |", InpVolume2));
+    Print("+==============================================+");
 }
 
 
@@ -1169,11 +1169,11 @@ void ManageOpenPositions()
 //| TRAILING STOP KHI CHỈ CÓ 1 LỆNH                                |
 //|                                                                   |
 //| Giai đoạn 1 (chưa đạt TP1):                                     |
-//|   → Chờ giá chạm TP1, sau đó dời SL về Entry+1 giá             |
+//|   -> Chờ giá chạm TP1, sau đó dời SL về Entry+1 giá             |
 //|                                                                   |
 //| Giai đoạn 2 (đã đạt TP1):                                       |
-//|   → Khi giá đạt 50% khoảng TP1→TP2: dời SL lên TP1             |
-//|   → Để lệnh chạy tự do đến TP2                                  |
+//|   -> Khi giá đạt 50% khoảng TP1->TP2: dời SL lên TP1             |
+//|   -> Để lệnh chạy tự do đến TP2                                  |
 //+------------------------------------------------------------------+
 void ManageSingleOrderTrailing(double curPrice)
 {
@@ -1197,13 +1197,13 @@ void ManageSingleOrderTrailing(double curPrice)
                            : NormalizeDouble(g_entry1 - 1.0, digits); // -1 giá
 
             if(ModifyPositionSL(g_ticket1, newSL, true))
-                Print(StringFormat("[TRAILING] ✓ TP1 đạt (%.2f) → SL dời về Entry+1giá=%.2f",
+                Print(StringFormat("[TRAILING] OK TP1 đạt (%.2f) -> SL dời về Entry+1giá=%.2f",
                     g_tp1, newSL));
         }
     }
     else
     {
-        // --- Giai đoạn 2: Trailing từ TP1 → TP2 ---
+        // --- Giai đoạn 2: Trailing từ TP1 -> TP2 ---
         // Khoảng cách từ TP1 đến TP2
         double tp1ToTp2 = MathAbs(g_tp2 - g_tp1);
 
@@ -1220,7 +1220,7 @@ void ManageSingleOrderTrailing(double curPrice)
             bool   better = (g_tradeDir == 1) ? (newSL > curSL) : (newSL < curSL);
 
             if(better && ModifyPositionSL(g_ticket1, newSL, true))
-                Print(StringFormat("[TRAILING] ✓ 50%%TP2 đạt (%.2f) → SL dời lên TP1=%.2f",
+                Print(StringFormat("[TRAILING] OK 50%%TP2 đạt (%.2f) -> SL dời lên TP1=%.2f",
                     midPoint, g_tp1));
         }
     }
@@ -1233,7 +1233,7 @@ void ManageSingleOrderTrailing(double curPrice)
 void CheckAndTriggerOrder2(double curPrice, double slDist)
 {
     // Tăng từ 50% lên 70% của SL distance:
-    // - 50% quá sớm → L2 mở sau vài phút, nhân lỗ nhanh
+    // - 50% quá sớm -> L2 mở sau vài phút, nhân lỗ nhanh
     // - 70% = giá đã đi sâu vào vùng nguy hiểm, cần trung bình giá
     double triggerDist = slDist * 0.70;
     bool   trigger     = false;
@@ -1253,8 +1253,8 @@ void CheckAndTriggerOrder2(double curPrice, double slDist)
 //| QUẢN LÝ KHI CÓ 2 LỆNH ĐANG MỞ                                 |
 //|                                                                   |
 //| Điều kiện đóng lệnh 2:                                          |
-//|   Buy : giá hồi lên ≥ entry - 1 giá (cách entry 1 giá)         |
-//|   Sell: giá hồi xuống ≤ entry + 1 giá                           |
+//|   Buy : giá hồi lên >= entry - 1 giá (cách entry 1 giá)         |
+//|   Sell: giá hồi xuống <= entry + 1 giá                           |
 //| Sau đó: dời SL lệnh 1 về entry (hòa vốn), trailing tiếp tục    |
 //+------------------------------------------------------------------+
 void ManageTwoOrders(double curPrice)
@@ -1268,7 +1268,7 @@ void ManageTwoOrders(double curPrice)
 
     if(doClose && g_hasOrder2 && g_ticket2 != 0)
     {
-        Print(StringFormat("[2L] Giá hồi về gần entry (%.2f ≈ entry %.2f ±1 giá) → Đóng L2, SL L1→entry",
+        Print(StringFormat("[2L] Giá hồi về gần entry (%.2f ~= entry %.2f ±1 giá) -> Đóng L2, SL L1->entry",
             curPrice, g_entry1));
 
         if(ClosePositionByTicket(g_ticket2))
@@ -1279,7 +1279,7 @@ void ManageTwoOrders(double curPrice)
             // Dời SL lệnh 1 về đúng entry (hòa vốn hoàn toàn)
             double entryAsSL = NormalizeDouble(g_entry1, digits);
             if(ModifyPositionSL(g_ticket1, entryAsSL, false))
-                Print(StringFormat("[TRAILING] ✓ SL lệnh 1 dời về entry=%.2f (hòa vốn)", g_entry1));
+                Print(StringFormat("[TRAILING] OK SL lệnh 1 dời về entry=%.2f (hòa vốn)", g_entry1));
 
             // Tiếp tục cơ chế trailing 1 lệnh từ tick kế tiếp
         }
@@ -1382,7 +1382,7 @@ bool ClosePositionByTicket(ulong ticket)
         return false;
     }
 
-    Print(StringFormat("[ĐÓNG] ✓ ticket=%llu vol=%.2f", ticket, vol));
+    Print(StringFormat("[ĐÓNG] OK ticket=%llu vol=%.2f", ticket, vol));
     return true;
 }
 
@@ -1449,101 +1449,101 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 //| DANH SÁCH ĐIỂM CẦN TEST TRÊN TÀI KHOẢN DEMO                    |
 //+------------------------------------------------------------------+
 /*
-╔══════════════════════════════════════════════════════════════════╗
-║           DANH SÁCH ĐIỂM CẦN TEST KỸ TRÊN DEMO                  ║
-╠══════════════════════════════════════════════════════════════════╣
-║                                                                   ║
-║  A. KIỂM TRA BỘ LỌC AN TOÀN                                     ║
-║  ─────────────────────────────                                    ║
-║  [ ] 1. Session filter: EA không vào lệnh ngoài 7h-16h GMT       ║
-║         → Kiểm tra Journal lúc 6:59 GMT và 16:00 GMT             ║
-║  [ ] 2. Spread filter: Vào giờ tin tức, spread tăng cao          ║
-║         → EA phải log "[LỌC SPREAD]" và không mở lệnh            ║
-║  [ ] 3. News filter: Đặt thủ công giờ vào vùng NFP (T6 đầu      ║
-║         tháng 13:00-14:00 GMT) → EA phải log "[TIN TỨC]"        ║
-║  [ ] 4. Max lệnh/ngày: Mở 10 lệnh thủ công cùng magic number    ║
-║         → EA phải dừng và log "[GIỚI HẠN]"                      ║
-║  [ ] 5. Thua liên tiếp: Tạo 3 lệnh thua liên tiếp trong lịch sử ║
-║         → EA phải log "[DỪNG BOT]" và không mở lệnh mới         ║
-║  [ ] 6. Reset ngày: Sau 00:00 GMT, bot phải tự bật lại          ║
-║                                                                   ║
-║  B. KIỂM TRA TÍN HIỆU ĐA KHUNG                                  ║
-║  ──────────────────────────────                                   ║
-║  [ ] 7. H4 trend: Quan sát Journal khi giá vượt/phá EMA21 H4    ║
-║         → Log H4 phải thay đổi chiều đúng lúc                   ║
-║  [ ] 8. H4/H1 conflict: Khi H4=Buy mà H1=Sell                   ║
-║         → Log phải hiện "[LỌC] mâu thuẫn" → không vào lệnh      ║
-║  [ ] 9. ADX filter: Dùng Strategy Tester, quan sát log ADX       ║
-║         → Khi ADX < 25: "[ADX] Quá thấp"                        ║
-║         → Khi ADX > 40: "[ADX] Quá cao"                         ║
-║  [ ] 10. EMA crossover H1: Xác nhận cross được phát hiện đúng   ║
-║          trong vòng 4 bars H1 → log "[H1 EMA] Bullish/Bearish"  ║
-║  [ ] 11. Pullback EMA21 H1: Khi giá xa EMA21                    ║
-║          → Log "[PULLBACK] Chưa pullback"                        ║
-║  [ ] 12. M15 xác nhận: Test với M15 đang ngược chiều H4         ║
-║          → Log "[M15] không xác nhận"                           ║
-║  [ ] 13. M5 nến doji: Khi nến M5 thân rất nhỏ                  ║
-║          → Log "[M5] Nến doji"                                   ║
-║                                                                   ║
-║  C. KIỂM TRA TÍNH TOÁN SL/TP                                    ║
-║  ─────────────────────────────                                    ║
-║  [ ] 14. SL vượt ngưỡng 30 giá: Test khi ATR cao bất thường     ║
-║          → Log "[LỌC] SL quá xa"                                 ║
-║  [ ] 15. SL chính xác: So sánh SL trên chart với log            ║
-║          "Structure=... ATR=... SL=..."                          ║
-║  [ ] 16. TP1 = Entry + 2×SL_dist | TP2 = Entry + 3×SL_dist     ║
-║          → Kiểm tra tính toán chính xác bằng tay                ║
-║  [ ] 17. Broker stops level: ModifyPositionSL không bị lỗi      ║
-║          "Invalid stops" → kiểm tra minDist được xử lý đúng     ║
-║                                                                   ║
-║  D. KIỂM TRA QUẢN LÝ LỆNH                                       ║
-║  ─────────────────────────                                        ║
-║  [ ] 18. Không mở lệnh mới khi đang có lệnh mở                  ║
-║          → Kiểm tra trong Journal: EA phải return sớm            ║
-║  [ ] 19. Trailing TP1: Khi giá đạt TP1, SL phải dời về          ║
-║          Entry + 1 giá (Buy) hoặc Entry - 1 giá (Sell)          ║
-║  [ ] 20. Trailing 50%TP2: Khi giá đạt giữa TP1-TP2,            ║
-║          SL phải dời về TP1                                      ║
-║  [ ] 21. Lệnh 2 kích hoạt: Khi giá lùi đúng 50% SL dist        ║
-║          → Phải mở L2 với đúng SL và TP                         ║
-║  [ ] 22. Lệnh 2 CHỈ mở 1 lần: Sau khi L2 đóng, giá lại lùi     ║
-║          → EA không được mở L3                                   ║
-║  [ ] 23. Đóng L2 khi giá hồi về: Giá về trong 1 giá từ entry   ║
-║          → L2 đóng, SL L1 về entry → trailing tiếp tục          ║
-║  [ ] 24. Filling type: Test trên các loại broker khác nhau      ║
-║          (ECN/STP) → không bị lỗi "Invalid fill mode"           ║
-║                                                                   ║
-║  E. KIỂM TRA STRATEGY TESTER                                     ║
-║  ─────────────────────────────                                    ║
-║  [ ] 25. Backtest 6 tháng với OHLC on M1 (Every tick không cần) ║
-║          → Kiểm tra số lệnh, win rate, drawdown hợp lý          ║
-║  [ ] 26. Forward test 2-4 tuần trên demo real-time               ║
-║          → So sánh kết quả backtest vs demo                      ║
-║  [ ] 27. Optimization: Thử các giá trị ADX Min 20-30,           ║
-║          ADX Max 35-50, EMA Fast 5-13 → tìm tham số tối ưu      ║
-║  [ ] 28. Test với spread cao (30+ giá): Dùng Symbol Spread      ║
-║          = 300 points trong tester → EA không mở lệnh            ║
-║                                                                   ║
-║  F. KIỂM TRA ĐẶC BIỆT                                           ║
-║  ────────────────────                                             ║
-║  [ ] 29. Mất kết nối internet giữa chừng: Reconnect lại         ║
-║          → EA phải nhận ra lệnh cũ qua SyncPositionState        ║
-║  [ ] 30. Khởi động lại MT5 khi đang có lệnh mở                  ║
-║          → EA phải resume đúng trạng thái (g_entry1, g_tp1...)  ║
-║          LƯU Ý: Hiện tại các biến g_* không được lưu qua restart║
-║          → Cần test: EA có trailing tiếp tục đúng không?         ║
-║  [ ] 31. 2 EA chạy song song cùng symbol khác magic number      ║
-║          → Không được can thiệp lẫn nhau                        ║
-║                                                                   ║
-║  G. LƯU Ý QUAN TRỌNG VỀ RESTART EA                              ║
-║  ──────────────────────────────────                               ║
-║  ⚠ Khi EA restart (MT5 restart/EA reload), các biến g_entry1,   ║
-║    g_tp1, g_tp2, g_tradeDir, g_tp1Reached sẽ bị reset = 0.     ║
-║    Điều này có nghĩa là trailing stop sẽ KHÔNG hoạt động đúng  ║
-║    cho các lệnh đang mở từ trước.                               ║
-║    → Giải pháp cho production: Lưu các giá trị này vào          ║
-║      GlobalVariable hoặc file CSV để persist qua restart.       ║
-╚══════════════════════════════════════════════════════════════════╝
++==================================================================+
+|           DANH SÁCH ĐIỂM CẦN TEST KỸ TRÊN DEMO                  |
++==================================================================|
+|                                                                   |
+|  A. KIỂM TRA BỘ LỌC AN TOÀN                                     |
+|  -----------------------------                                    |
+|  [ ] 1. Session filter: EA không vào lệnh ngoài 7h-16h GMT       |
+|         -> Kiểm tra Journal lúc 6:59 GMT và 16:00 GMT             |
+|  [ ] 2. Spread filter: Vào giờ tin tức, spread tăng cao          |
+|         -> EA phải log "[LỌC SPREAD]" và không mở lệnh            |
+|  [ ] 3. News filter: Đặt thủ công giờ vào vùng NFP (T6 đầu      |
+|         tháng 13:00-14:00 GMT) -> EA phải log "[TIN TỨC]"        |
+|  [ ] 4. Max lệnh/ngày: Mở 10 lệnh thủ công cùng magic number    |
+|         -> EA phải dừng và log "[GIỚI HẠN]"                      |
+|  [ ] 5. Thua liên tiếp: Tạo 3 lệnh thua liên tiếp trong lịch sử |
+|         -> EA phải log "[DỪNG BOT]" và không mở lệnh mới         |
+|  [ ] 6. Reset ngày: Sau 00:00 GMT, bot phải tự bật lại          |
+|                                                                   |
+|  B. KIỂM TRA TÍN HIỆU ĐA KHUNG                                  |
+|  ------------------------------                                   |
+|  [ ] 7. H4 trend: Quan sát Journal khi giá vượt/phá EMA21 H4    |
+|         -> Log H4 phải thay đổi chiều đúng lúc                   |
+|  [ ] 8. H4/H1 conflict: Khi H4=Buy mà H1=Sell                   |
+|         -> Log phải hiện "[LỌC] mâu thuẫn" -> không vào lệnh      |
+|  [ ] 9. ADX filter: Dùng Strategy Tester, quan sát log ADX       |
+|         -> Khi ADX < 25: "[ADX] Quá thấp"                        |
+|         -> Khi ADX > 40: "[ADX] Quá cao"                         |
+|  [ ] 10. EMA crossover H1: Xác nhận cross được phát hiện đúng   |
+|          trong vòng 4 bars H1 -> log "[H1 EMA] Bullish/Bearish"  |
+|  [ ] 11. Pullback EMA21 H1: Khi giá xa EMA21                    |
+|          -> Log "[PULLBACK] Chưa pullback"                        |
+|  [ ] 12. M15 xác nhận: Test với M15 đang ngược chiều H4         |
+|          -> Log "[M15] không xác nhận"                           |
+|  [ ] 13. M5 nến doji: Khi nến M5 thân rất nhỏ                  |
+|          -> Log "[M5] Nến doji"                                   |
+|                                                                   |
+|  C. KIỂM TRA TÍNH TOÁN SL/TP                                    |
+|  -----------------------------                                    |
+|  [ ] 14. SL vượt ngưỡng 30 giá: Test khi ATR cao bất thường     |
+|          -> Log "[LỌC] SL quá xa"                                 |
+|  [ ] 15. SL chính xác: So sánh SL trên chart với log            |
+|          "Structure=... ATR=... SL=..."                          |
+|  [ ] 16. TP1 = Entry + 2×SL_dist | TP2 = Entry + 3×SL_dist     |
+|          -> Kiểm tra tính toán chính xác bằng tay                |
+|  [ ] 17. Broker stops level: ModifyPositionSL không bị lỗi      |
+|          "Invalid stops" -> kiểm tra minDist được xử lý đúng     |
+|                                                                   |
+|  D. KIỂM TRA QUẢN LÝ LỆNH                                       |
+|  -------------------------                                        |
+|  [ ] 18. Không mở lệnh mới khi đang có lệnh mở                  |
+|          -> Kiểm tra trong Journal: EA phải return sớm            |
+|  [ ] 19. Trailing TP1: Khi giá đạt TP1, SL phải dời về          |
+|          Entry + 1 giá (Buy) hoặc Entry - 1 giá (Sell)          |
+|  [ ] 20. Trailing 50%TP2: Khi giá đạt giữa TP1-TP2,            |
+|          SL phải dời về TP1                                      |
+|  [ ] 21. Lệnh 2 kích hoạt: Khi giá lùi đúng 50% SL dist        |
+|          -> Phải mở L2 với đúng SL và TP                         |
+|  [ ] 22. Lệnh 2 CHỈ mở 1 lần: Sau khi L2 đóng, giá lại lùi     |
+|          -> EA không được mở L3                                   |
+|  [ ] 23. Đóng L2 khi giá hồi về: Giá về trong 1 giá từ entry   |
+|          -> L2 đóng, SL L1 về entry -> trailing tiếp tục          |
+|  [ ] 24. Filling type: Test trên các loại broker khác nhau      |
+|          (ECN/STP) -> không bị lỗi "Invalid fill mode"           |
+|                                                                   |
+|  E. KIỂM TRA STRATEGY TESTER                                     |
+|  -----------------------------                                    |
+|  [ ] 25. Backtest 6 tháng với OHLC on M1 (Every tick không cần) |
+|          -> Kiểm tra số lệnh, win rate, drawdown hợp lý          |
+|  [ ] 26. Forward test 2-4 tuần trên demo real-time               |
+|          -> So sánh kết quả backtest vs demo                      |
+|  [ ] 27. Optimization: Thử các giá trị ADX Min 20-30,           |
+|          ADX Max 35-50, EMA Fast 5-13 -> tìm tham số tối ưu      |
+|  [ ] 28. Test với spread cao (30+ giá): Dùng Symbol Spread      |
+|          = 300 points trong tester -> EA không mở lệnh            |
+|                                                                   |
+|  F. KIỂM TRA ĐẶC BIỆT                                           |
+|  --------------------                                             |
+|  [ ] 29. Mất kết nối internet giữa chừng: Reconnect lại         |
+|          -> EA phải nhận ra lệnh cũ qua SyncPositionState        |
+|  [ ] 30. Khởi động lại MT5 khi đang có lệnh mở                  |
+|          -> EA phải resume đúng trạng thái (g_entry1, g_tp1...)  |
+|          LƯU Ý: Hiện tại các biến g_* không được lưu qua restart|
+|          -> Cần test: EA có trailing tiếp tục đúng không?         |
+|  [ ] 31. 2 EA chạy song song cùng symbol khác magic number      |
+|          -> Không được can thiệp lẫn nhau                        |
+|                                                                   |
+|  G. LƯU Ý QUAN TRỌNG VỀ RESTART EA                              |
+|  ----------------------------------                               |
+|  ! Khi EA restart (MT5 restart/EA reload), các biến g_entry1,   |
+|    g_tp1, g_tp2, g_tradeDir, g_tp1Reached sẽ bị reset = 0.     |
+|    Điều này có nghĩa là trailing stop sẽ KHÔNG hoạt động đúng  |
+|    cho các lệnh đang mở từ trước.                               |
+|    -> Giải pháp cho production: Lưu các giá trị này vào          |
+|      GlobalVariable hoặc file CSV để persist qua restart.       |
++==================================================================+
 */
 
-// ═══ END OF FILE ═══════════════════════════════════════════════════
+// === END OF FILE ===================================================
