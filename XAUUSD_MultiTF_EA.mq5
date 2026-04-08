@@ -26,8 +26,8 @@ input int    InpEMASlow        = 21;     // EMA Slow Period (H1/H4/M15 xu hướ
 //--- Nhóm ADX
 input group           "=== CÀI ĐẶT ADX ==="
 input int    InpADXPeriod      = 14;     // ADX Period
-input double InpADXMin         = 25.0;   // ADX tối thiểu để vào lệnh (>25 cho phép)
-input double InpADXMax         = 40.0;   // ADX tối đa (>40 xu hướng kiệt sức, bỏ qua)
+input double InpADXMin         = 20.0;   // ADX toi thieu de vao lenh (>20 cho phep)
+input double InpADXMax         = 55.0;   // ADX toi da (>55 xu huong kiet suc, bo qua) - XAU thuong co ADX cao
 
 //--- Nhóm ATR
 input group           "=== CÀI ĐẶT ATR ==="
@@ -35,9 +35,10 @@ input int    InpATRPeriod      = 14;     // ATR Period (dùng tính buffer cho S
 
 //--- Quản lý lệnh
 input group           "=== QUẢN LÝ LỆNH ==="
-input double InpMaxSLGia       = 30.0;   // Max SL tính bằng giá ($30) - bỏ qua nếu vượt
-input double InpVolume1        = 0.1;    // Volume lệnh 1 (lot)
-input double InpVolume2        = 0.3;    // Volume lệnh 2 (lot)
+input double InpRiskPctL1      = 1.0;    // Risk %% von moi lenh L1 (1.0 = 1%% balance) - 0 = dung lot co dinh
+input double InpMaxSLGia       = 35.0;   // Max SL tinh bang gia ($35) - bo qua neu vuot
+input double InpVolume1        = 0.05;   // Volume lenh 1 co dinh (lot) - chi dung khi InpRiskPctL1=0
+input double InpVolume2        = 0.1;    // Volume lenh 2 (khong dung - L2 tu dong dung InpVolume1)
 
 //--- Bộ lọc an toàn
 input group           "=== BỘ LỌC AN TOÀN ==="
@@ -530,6 +531,49 @@ bool CheckRSIforL2()
 }
 
 //+------------------------------------------------------------------+
+//| TINH LOT THEO RISK %% VON (Risk-based position sizing)          |
+//| slDist: khoang cach SL tinh bang don vi gia (USD move in gold)  |
+//| Tra ve lot da duoc lam tron va kiem tra gioi han broker         |
+//+------------------------------------------------------------------+
+double CalcLotByRisk(double slDist)
+{
+    // Neu InpRiskPctL1 = 0 -> dung lot co dinh InpVolume1
+    if(InpRiskPctL1 <= 0.0 || slDist <= 0.0)
+        return InpVolume1;
+
+    double balance   = AccountInfoDouble(ACCOUNT_BALANCE);
+    double riskAmt   = balance * InpRiskPctL1 / 100.0; // So tien co the mat
+
+    // Gia tri 1 point (0.01 price unit) cho 1 lot tren broker hien tai
+    double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
+    double tickSize  = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+    double point     = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+
+    // Gia tri tien cua 1 point voi 1 lot
+    double pointValue = (tickSize > 0) ? tickValue / tickSize * point : 0.0;
+    if(pointValue <= 0.0) return InpVolume1; // Fallback neu khong tinh duoc
+
+    // SL distance doi sang points
+    double slPoints = slDist / point;
+
+    // Lot can thiet de risk dung riskAmt
+    double calcLot = riskAmt / (slPoints * pointValue);
+
+    // Lam tron va gioi han theo broker
+    double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+    double minLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+    double maxLot  = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
+
+    calcLot = MathFloor(calcLot / lotStep) * lotStep;
+    calcLot = MathMax(minLot, MathMin(maxLot, calcLot));
+    calcLot = NormalizeDouble(calcLot, 2);
+
+    PrintFormat("[LOT CALC] Balance=$%.2f | Risk=%.1f%%=$%.2f | SL=%.2f gia | Lot=%.2f",
+        balance, InpRiskPctL1, riskAmt, slDist, calcLot);
+    return calcLot;
+}
+
+//+------------------------------------------------------------------+
 //| LẤY FILLING TYPE HỢP LỆ VỚI BROKER                             |
 //+------------------------------------------------------------------+
 ENUM_ORDER_TYPE_FILLING GetFillType()
@@ -962,10 +1006,10 @@ int GetH1Signal()
         return 0;
     }
 
-    // --- DI direction: +DI phai lon hon -DI it nhat 3 don vi ---
-    // Nguong 3 tranh truong hop +DI va -DI gap nhau (khong ro chieu)
-    bool bullMomentum = (plusVal > minVal + 3.0);
-    bool bearMomentum = (minVal  > plusVal + 3.0);
+    // --- DI direction: +DI phai lon hon -DI it nhat 2 don vi ---
+    // Giam tu 3 xuong 2 de khong bo lo tin hieu xu huong ro rang
+    bool bullMomentum = (plusVal > minVal + 2.0);
+    bool bearMomentum = (minVal  > plusVal + 2.0);
 
     if(!bullMomentum && !bearMomentum)
     {
@@ -1368,18 +1412,25 @@ bool CalculateSLTP(int  direction,
 }
 
 //+------------------------------------------------------------------+
-//| MỞ LỆNH 1                                                        |
-//| Volume: InpVolume1 lot                                           |
-//| TP đặt vào lệnh = TP2; TP1 được quản lý qua trailing stop       |
+//| MO LENH 1                                                       |
+//| Volume: tinh theo Risk%% von (InpRiskPctL1) hoac InpVolume1 co dinh
 //+------------------------------------------------------------------+
 bool PlaceOrder1(int direction, double sl, double tp1, double tp2)
 {
+    // Tinh entry de biet SL distance truoc khi tinh lot
+    double entryPrice = (direction == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                                         : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+    double slDist     = MathAbs(entryPrice - sl);
+
+    // Risk-based lot sizing: dam bao moi lenh chi mat dung % von da dinh
+    double calcLot    = CalcLotByRisk(slDist);
+
     MqlTradeRequest req = {};
     MqlTradeResult  res = {};
 
     req.action       = TRADE_ACTION_DEAL;
     req.symbol       = Symbol();
-    req.volume       = InpVolume1;
+    req.volume       = calcLot;
     req.sl           = sl;
     req.tp           = tp2;              // TP2 đặt thẳng vào lệnh
     req.magic        = InpMagicNumber;
@@ -1424,8 +1475,8 @@ bool PlaceOrder1(int direction, double sl, double tp1, double tp2)
     Print(StringFormat("| SL     : %-38.2f |", sl));
     Print(StringFormat("| TP1    : %-33.2f (1:2) |", tp1));
     Print(StringFormat("| TP2    : %-33.2f (1:3) |", tp2));
-    Print(StringFormat("| Volume : %-35.2f lot |", InpVolume1));
-    Print(StringFormat("| Lệnh hôm nay: %d / %d                          |",
+    Print(StringFormat("| Volume : %-27.2f lot (Risk %.1f%%) |", calcLot, InpRiskPctL1));
+    Print(StringFormat("| Lenh hom nay: %d / %d                          |",
         g_dailyTradeCount, InpMaxDailyTrades));
     Print("+==============================================+");
     return true;
