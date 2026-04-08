@@ -48,6 +48,10 @@ input bool   InpNewsFilter     = true;   // Bật/tắt bộ lọc tin tức t�
 input bool   InpPartialCloseTP1= true;   // Dong 50%% L1 tai TP1 (lock profit, SL->entry)
 input int    InpMaxHoldBarsH1  = 12;     // Tu dong dong sau X bars H1 neu chua TP1 (0=tat)
 input double InpL2TriggerPct   = 0.70;   // Kich hoat L2 o X%% khoang cach SL (mac dinh 70%%)
+input int    InpRSIPeriodL2    = 14;     // RSI period cho bo loc L2
+input double InpRSILevelL2     = 35.0;  // RSI nguong: Buy L2 chi khi RSI<35, Sell L2 khi RSI>65
+input double InpDailyDDPct     = 3.0;   // Max drawdown trong ngay (%% balance) truoc khi dung bot
+input double InpTrailATRMult   = 1.5;   // ATR M15 multiplier cho trailing SL sau khi dat TP1
 
 //--- Cài đặt hệ thống
 input group           "=== CÀI ĐẶT HỆ THỐNG ==="
@@ -66,6 +70,8 @@ int g_h1ADXHandle      = INVALID_HANDLE;  // ADX trên H1
 int g_m15EMA21Handle   = INVALID_HANDLE;  // EMA21 trên M15
 int g_m5EMAFastHandle  = INVALID_HANDLE;  // EMA Fast trên M5
 int g_m5ATRHandle      = INVALID_HANDLE;  // ATR trên M5
+int g_m5RSIHandle      = INVALID_HANDLE;  // RSI tren M5 (loc L2: tranh averaging vao momentum manh)
+int g_m15ATRHandle     = INVALID_HANDLE;  // ATR tren M15 (trailing SL sau TP1)
 
 //+------------------------------------------------------------------+
 //| BIẾN TRẠNG THÁI TOÀN CỤC                                         |
@@ -82,6 +88,7 @@ bool     g_hasOrder2         = false;  // Có lệnh 2 đang mở không
 ulong    g_ticket1           = 0;      // Ticket position lệnh 1
 ulong    g_ticket2           = 0;      // Ticket position lệnh 2
 bool     g_order2EverOpened  = false;  // Lệnh 2 đã từng mở (tránh mở nhiều lần)
+double   g_entry2            = 0.0;   // Gia entry lenh 2 (de kiem tra L2 co loi truoc khi dong)
 
 //--- Thông số giao dịch đang mở
 int      g_tradeDir          = 0;      // Chiều GD: 1=Buy, -1=Sell
@@ -120,6 +127,8 @@ int OnInit()
     g_m15EMA21Handle  = iMA(sym, PERIOD_M15, InpEMASlow,  0, MODE_EMA, PRICE_CLOSE);
     g_m5EMAFastHandle = iMA(sym, PERIOD_M5,  InpEMAFast,  0, MODE_EMA, PRICE_CLOSE);
     g_m5ATRHandle     = iATR(sym, PERIOD_M5, InpATRPeriod);
+    g_m5RSIHandle     = iRSI(sym, PERIOD_M5,  InpRSIPeriodL2, PRICE_CLOSE);
+    g_m15ATRHandle    = iATR(sym, PERIOD_M15, InpATRPeriod);
 
     //--- Kiểm tra tất cả handles hợp lệ
     if(g_d1EMA21Handle   == INVALID_HANDLE ||
@@ -129,14 +138,19 @@ int OnInit()
        g_h1ADXHandle     == INVALID_HANDLE ||
        g_m15EMA21Handle  == INVALID_HANDLE ||
        g_m5EMAFastHandle == INVALID_HANDLE ||
-       g_m5ATRHandle     == INVALID_HANDLE)
+       g_m5ATRHandle     == INVALID_HANDLE ||
+       g_m5RSIHandle     == INVALID_HANDLE ||
+       g_m15ATRHandle    == INVALID_HANDLE)
     {
-        Print("[LỖI NGHIÊM TRỌNG] Không thể khởi tạo indicator handles! Error: ", GetLastError());
+        Print("[LOI NGHIEM TRONG] Khong the khoi tao indicator handles! Error: ", GetLastError());
         return INIT_FAILED;
     }
 
     //--- Khởi tạo ngày hiện tại để reset đếm hàng ngày
     g_currentDay = StringToTime(TimeToString(TimeCurrent(), TIME_DATE));
+
+    //--- KHOI PHUC TRANG THAI: Neu MT5 restart khi dang co lenh, doc lai tu GlobalVariables
+    RestoreStateFromGV();
 
     //--- In thông tin cài đặt khi khởi động
     Print("+==================================================+");
@@ -170,8 +184,10 @@ void OnDeinit(const int reason)
     if(g_m15EMA21Handle  != INVALID_HANDLE) IndicatorRelease(g_m15EMA21Handle);
     if(g_m5EMAFastHandle != INVALID_HANDLE) IndicatorRelease(g_m5EMAFastHandle);
     if(g_m5ATRHandle     != INVALID_HANDLE) IndicatorRelease(g_m5ATRHandle);
+    if(g_m5RSIHandle     != INVALID_HANDLE) IndicatorRelease(g_m5RSIHandle);
+    if(g_m15ATRHandle    != INVALID_HANDLE) IndicatorRelease(g_m15ATRHandle);
 
-    Print("[EA] XAUUSD Multi-TF EA dừng. Lý do: ", reason);
+    Print("[EA] XAUUSD Multi-TF EA dung. Ly do: ", reason);
 }
 
 
@@ -183,7 +199,24 @@ void OnTick()
     //--- Bước 1: Reset bộ đếm hàng ngày khi sang ngày mới (00:00 GMT)
     CheckAndResetDaily();
 
-    //--- Bước 2: Nếu bot đang dừng do thua liên tiếp, không làm gì
+    //--- Bước 2: Equity guard - dung bot neu drawdown trong ngay vuot nguong
+    if(InpDailyDDPct > 0)
+    {
+        double balance  = AccountInfoDouble(ACCOUNT_BALANCE);
+        double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
+        double ddPct    = (balance > 0) ? (balance - equity) / balance * 100.0 : 0.0;
+        if(ddPct >= InpDailyDDPct)
+        {
+            g_botPausedToday = true;
+            LogThrottled("EQUITY_DD",
+                StringFormat("[EQUITY] Drawdown %.2f%% >= %.2f%% -> Dung bot bao ve von",
+                    ddPct, InpDailyDDPct),
+                3600);
+            return;
+        }
+    }
+
+    //--- Nếu bot đang dừng do thua liên tiếp, không làm gì
     if(g_botPausedToday)
     {
         LogThrottled("PAUSED",
@@ -342,6 +375,161 @@ string DirToStr(int dir)
 }
 
 //+------------------------------------------------------------------+
+//| GLOBALVARIABLES PERSISTENCE - Luu/khoi phuc trang thai qua restart
+//| Giai quyet: MT5 bi tat/restart khi dang co lenh -> EA "quen" SL/TP
+//+------------------------------------------------------------------+
+string GvPfx() { return StringFormat("EA%d_", InpMagicNumber); }
+
+// Luu toan bo trang thai lenh vao GlobalVariables (o cung MT5, ton tai qua restart)
+void SaveStateToGV()
+{
+    string p = GvPfx();
+    GlobalVariableSet(p + "hasO1",      (double)g_hasOrder1);
+    GlobalVariableSet(p + "hasO2",      (double)g_hasOrder2);
+    GlobalVariableSet(p + "ticket1",    (double)g_ticket1);
+    GlobalVariableSet(p + "ticket2",    (double)g_ticket2);
+    GlobalVariableSet(p + "dir",        (double)g_tradeDir);
+    GlobalVariableSet(p + "entry1",     g_entry1);
+    GlobalVariableSet(p + "sl",         g_sl);
+    GlobalVariableSet(p + "tp1",        g_tp1);
+    GlobalVariableSet(p + "tp2",        g_tp2);
+    GlobalVariableSet(p + "tp1Hit",     (double)g_tp1Reached);
+    GlobalVariableSet(p + "o2Ever",     (double)g_order2EverOpened);
+    GlobalVariableSet(p + "openTime",   (double)g_tradeOpenTime);
+    GlobalVariableSet(p + "entry2",     g_entry2);
+}
+
+// Xoa GlobalVariables khi khong con lenh nao (trang thai sach)
+void ClearStateGV()
+{
+    string p = GvPfx();
+    string keys[] = {"hasO1","hasO2","ticket1","ticket2","dir","entry1",
+                     "sl","tp1","tp2","tp1Hit","o2Ever","openTime","entry2"};
+    for(int i = 0; i < 13; i++)
+        GlobalVariableDel(p + keys[i]);
+}
+
+// Doc lai trang thai tu GlobalVariables sau khi restart
+void RestoreStateFromGV()
+{
+    string p = GvPfx();
+    // Neu khong co ban luu -> khoi dong lan dau, bo qua
+    if(!GlobalVariableCheck(p + "hasO1")) return;
+
+    g_hasOrder1        = (bool)(int)GlobalVariableGet(p + "hasO1");
+    g_hasOrder2        = (bool)(int)GlobalVariableGet(p + "hasO2");
+    g_ticket1          = (ulong)GlobalVariableGet(p + "ticket1");
+    g_ticket2          = (ulong)GlobalVariableGet(p + "ticket2");
+    g_tradeDir         = (int)GlobalVariableGet(p + "dir");
+    g_entry1           = GlobalVariableGet(p + "entry1");
+    g_sl               = GlobalVariableGet(p + "sl");
+    g_tp1              = GlobalVariableGet(p + "tp1");
+    g_tp2              = GlobalVariableGet(p + "tp2");
+    g_tp1Reached       = (bool)(int)GlobalVariableGet(p + "tp1Hit");
+    g_order2EverOpened = (bool)(int)GlobalVariableGet(p + "o2Ever");
+    g_tradeOpenTime    = (datetime)(long)GlobalVariableGet(p + "openTime");
+    g_entry2           = GlobalVariableGet(p + "entry2");
+
+    if(g_hasOrder1 || g_hasOrder2)
+    {
+        Print("==================================================");
+        Print("[RESTORE] Khoi phuc trang thai sau restart:");
+        PrintFormat("[RESTORE] Lenh1=%s ticket=%llu | Lenh2=%s ticket=%llu",
+            g_hasOrder1 ? "CO" : "KHONG", g_ticket1,
+            g_hasOrder2 ? "CO" : "KHONG", g_ticket2);
+        PrintFormat("[RESTORE] Dir=%s Entry=%.2f SL=%.2f TP1=%.2f TP2=%.2f TP1Hit=%s",
+            DirToStr(g_tradeDir), g_entry1, g_sl, g_tp1, g_tp2,
+            g_tp1Reached ? "YES" : "NO");
+        Print("==================================================");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| RETRY ORDERSEND - Thu lai 3 lan khi bi requote/busy              |
+//| Xu ly loi: 10006 (Requote), 10004 (Requote), 10016 (Busy)       |
+//+------------------------------------------------------------------+
+bool OrderSendRetry(MqlTradeRequest &req, MqlTradeResult &res, int maxRetries = 3)
+{
+    for(int attempt = 1; attempt <= maxRetries; attempt++)
+    {
+        // Cap nhat gia moi nhat truoc moi lan thu (tranh gia cu)
+        if(req.action == TRADE_ACTION_DEAL)
+        {
+            if(req.type == ORDER_TYPE_BUY)
+                req.price = SymbolInfoDouble(req.symbol, SYMBOL_ASK);
+            else if(req.type == ORDER_TYPE_SELL)
+                req.price = SymbolInfoDouble(req.symbol, SYMBOL_BID);
+        }
+
+        ResetLastError();
+        bool ok = OrderSend(req, res);
+
+        if(ok && (res.retcode == TRADE_RETCODE_DONE || res.retcode == TRADE_RETCODE_PLACED))
+            return true; // Thanh cong
+
+        // Cac ma loi co the thu lai (requote, busy, server lag)
+        bool retryable = (res.retcode == TRADE_RETCODE_REQUOTE   ||
+                          res.retcode == TRADE_RETCODE_PRICE_OFF  ||
+                          res.retcode == TRADE_RETCODE_TIMEOUT    ||
+                          res.retcode == TRADE_RETCODE_CONNECTION ||
+                          res.retcode == 10004);
+
+        PrintFormat("[RETRY %d/%d] retcode=%d | %s", attempt, maxRetries, res.retcode, res.comment);
+
+        if(!retryable || attempt == maxRetries) break;
+
+        // Doi 200ms truoc khi thu lai (tranh spam server)
+        Sleep(200);
+    }
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| KIEM TRA RSI M5 CHO LENH 2 (Tranh averaging vao momentum manh)  |
+//| Buy L2: chi khi RSI < InpRSILevelL2 (vung qua ban)              |
+//| Sell L2: chi khi RSI > (100 - InpRSILevelL2) (vung qua mua)    |
+//+------------------------------------------------------------------+
+bool CheckRSIforL2()
+{
+    double rsi[];
+    ArraySetAsSeries(rsi, true);
+    if(CopyBuffer(g_m5RSIHandle, 0, 1, 3, rsi) <= 0)
+    {
+        Print("[LOI] Khong doc duoc RSI M5: ", GetLastError());
+        return false; // An toan: khong mo L2 neu khong doc duoc RSI
+    }
+
+    double rsiVal    = rsi[0];
+    double levelOB   = 100.0 - InpRSILevelL2; // Nguong qua mua (VD: 65)
+    double levelOS   = InpRSILevelL2;          // Nguong qua ban (VD: 35)
+
+    if(g_tradeDir == 1) // Buy L2: can RSI qua ban (gia da giam manh, co the hoi phuc)
+    {
+        if(rsiVal <= levelOS)
+        {
+            Print(StringFormat("[RSI L2] OK BUY - RSI=%.1f <= %.1f (vung qua ban)", rsiVal, levelOS));
+            return true;
+        }
+        LogThrottled("RSI_L2_FAIL",
+            StringFormat("[RSI L2] FAIL BUY - RSI=%.1f > %.1f (chua qua ban, momentum con manh)", rsiVal, levelOS),
+            300);
+        return false;
+    }
+    else // Sell L2: can RSI qua mua (gia da tang manh, co the dao chieu)
+    {
+        if(rsiVal >= levelOB)
+        {
+            Print(StringFormat("[RSI L2] OK SELL - RSI=%.1f >= %.1f (vung qua mua)", rsiVal, levelOB));
+            return true;
+        }
+        LogThrottled("RSI_L2_FAIL",
+            StringFormat("[RSI L2] FAIL SELL - RSI=%.1f < %.1f (chua qua mua, momentum con manh)", rsiVal, levelOB),
+            300);
+        return false;
+    }
+}
+
+//+------------------------------------------------------------------+
 //| LẤY FILLING TYPE HỢP LỆ VỚI BROKER                             |
 //+------------------------------------------------------------------+
 ENUM_ORDER_TYPE_FILLING GetFillType()
@@ -448,6 +636,12 @@ void SyncPositionState()
     {
         g_order2EverOpened = false;
         g_tradeOpenTime    = 0;
+        g_entry2           = 0.0;
+        ClearStateGV(); // Xoa ban luu khi khong con lenh
+    }
+    else
+    {
+        SaveStateToGV(); // Luu trang thai moi nhat de bao ve khi restart
     }
 }
 
@@ -509,14 +703,16 @@ void CheckAndUpdateLossStreak()
 //+------------------------------------------------------------------+
 bool FilterSession()
 {
+    // Dung TimeGMT() thay vi TimeCurrent() de dam bao dung GMT that
+    // du broker dung GMT+2/+3 (server time khac GMT)
     MqlDateTime gmt;
-    TimeToStruct(TimeCurrent(), gmt);
+    TimeToStruct(TimeGMT(), gmt);
 
     bool inSession = (gmt.hour >= 7 && gmt.hour < 16);
 
     if(!inSession)
         LogThrottled("SESSION",
-            StringFormat("[LỌC SESSION] Ngoài giờ GD | Hiện: %02d:%02d GMT | Cho phép: 07:00-16:00 GMT",
+            StringFormat("[SESSION] Ngoai gio GD | GMT: %02d:%02d | Cho phep: 07:00-16:00 GMT",
                 gmt.hour, gmt.min),
             3600);
 
@@ -547,54 +743,49 @@ bool FilterSpread()
 }
 
 //+------------------------------------------------------------------+
-//| BỘ LỌC TIN TỨC: Chặn 30 phút trước/sau các sự kiện lớn         |
-//| NFP, CPI, Fed Rate Decision, GDP                                 |
-//| Ghi chú: Phiên bản này dùng lịch xấp xỉ (không cần API).       |
-//|          Nên kiểm tra thủ công lịch kinh tế mỗi tuần.           |
+//| BO LOC TIN TUC: Dung MQL5 Calendar API (chinh xac, tu dong cap nhat)
+//| Block +-35 phut quanh moi su kien HIGH impact cua USD/XAU       |
+//| Khong can hardcode gio co dinh - lay tu lich nen tang MT5        |
 //+------------------------------------------------------------------+
-// Helper: true khi đang trong cửa sổ ±30 phút quanh newsHour:newsMin
-bool IsInNewsWindow(int totalMin, int newsHour, int newsMin)
-{
-    int center = newsHour * 60 + newsMin;
-    return (totalMin >= center - 30 && totalMin <= center + 30);
-}
-
 bool FilterNews()
 {
-    MqlDateTime gmt;
-    TimeToStruct(TimeCurrent(), gmt);
+    datetime now      = TimeGMT();
+    datetime fromTime = now - 2100; // 35 phut truoc
+    datetime toTime   = now + 2100; // 35 phut sau
 
-    int dow      = gmt.day_of_week;
-    int dom      = gmt.day;
-    int mon      = gmt.mon;
-    int totalMin = gmt.hour * 60 + gmt.min;
+    MqlCalendarValue values[];
+    // Lay tat ca su kien USD trong cua so +-35 phut
+    int count = CalendarValueHistory(values, fromTime, toTime, "US");
 
-    // --- NFP: Thu 6 dau tien cua thang, 13:30 GMT ---
-    if(dow == 5 && dom <= 7 && IsInNewsWindow(totalMin, 13, 30))
+    for(int i = 0; i < count; i++)
     {
-        LogThrottled("NFP", "[TIN TUC] Vung NFP (Thu6 dau thang 13:30 GMT +-30p) -> Dung GD", 1800);
-        return false;
+        MqlCalendarEvent ev;
+        if(!CalendarEventById(values[i].event_id, ev)) continue;
+
+        // Chi block tin HIGH impact (NFP, CPI, FOMC, GDP, etc.)
+        if(ev.importance == CALENDAR_IMPORTANCE_HIGH)
+        {
+            LogThrottled("NEWS_CAL",
+                StringFormat("[NEWS] High-impact USD event: \"%s\" luc %s -> Dung GD",
+                    ev.name,
+                    TimeToString(values[i].time, TIME_DATE|TIME_MINUTES)),
+                300);
+            return false;
+        }
     }
 
-    // --- CPI / PPI: Thu 3 hoac Thu 4, tuan 2-3 thang, 13:30 GMT ---
-    if((dow == 2 || dow == 3) && dom >= 8 && dom <= 21 && IsInNewsWindow(totalMin, 13, 30))
+    // Kiem tra them vang (XAU) neu broker co calendar cho commodity
+    int countXau = CalendarValueHistory(values, fromTime, toTime, "XAU");
+    for(int i = 0; i < countXau; i++)
     {
-        LogThrottled("CPI", "[TIN TUC] Vung CPI/PPI (Thu3/4 tuan 2-3, 13:30 GMT +-30p) -> Dung GD", 1800);
-        return false;
-    }
-
-    // --- FED RATE DECISION: Thu 4, tuan 3-5, 19:00 GMT ---
-    if(dow == 3 && dom >= 15 && IsInNewsWindow(totalMin, 19, 0))
-    {
-        LogThrottled("FED", "[TIN TUC] Vung Fed Rate Decision (Thu4 tuan 3+, 19:00 GMT +-30p) -> Dung GD", 1800);
-        return false;
-    }
-
-    // --- GDP: Thu 4/5 cuoi quy (thang 1,4,7,10), 13:30 GMT ---
-    if((mon==1||mon==4||mon==7||mon==10) && (dow==4||dow==5) && dom>=22 && IsInNewsWindow(totalMin,13,30))
-    {
-        LogThrottled("GDP", "[TIN TUC] Vung GDP cuoi quy (13:30 GMT +-30p) -> Dung GD", 1800);
-        return false;
+        MqlCalendarEvent ev;
+        if(!CalendarEventById(values[i].event_id, ev)) continue;
+        if(ev.importance == CALENDAR_IMPORTANCE_HIGH)
+        {
+            LogThrottled("NEWS_XAU",
+                StringFormat("[NEWS] High-impact XAU event: \"%s\" -> Dung GD", ev.name), 300);
+            return false;
+        }
     }
 
     return true;
@@ -1080,58 +1271,60 @@ bool CalculateSLTP(int  direction,
         Print("[LỖI] Không đọc được ATR M5: ", GetLastError());
         return false;
     }
-    double atrVal = atrBuf[0]; // ATR của bar M5 đã đóng gần nhất
+    double atrVal = atrBuf[0]; // ATR cua bar M5 da dong gan nhat
 
-    // --- Tìm Swing Low/High cấu trúc M5 (30 bar gần nhất) ---
-    const int SWING_BARS = 30;
-    double m5High[], m5Low[];
-    ArraySetAsSeries(m5High, true);
-    ArraySetAsSeries(m5Low, true);
+    // --- Tim Swing Low/High tren M15 (co y nghia cau truc hon M5) ---
+    // M15 swing (20 bar = 5 gio) cho muc SL co y nghia cau truc thuc su
+    // Sau do them buffer ATR M5 de tranh noise / spike qua SL
+    const int SWING_BARS = 20;
+    double m15High[], m15Low[];
+    ArraySetAsSeries(m15High, true);
+    ArraySetAsSeries(m15Low, true);
 
-    if(CopyHigh(Symbol(), PERIOD_M5, 1, SWING_BARS, m5High) <= 0) return false;
-    if(CopyLow (Symbol(), PERIOD_M5, 1, SWING_BARS, m5Low)  <= 0) return false;
+    if(CopyHigh(Symbol(), PERIOD_M15, 1, SWING_BARS, m15High) <= 0) return false;
+    if(CopyLow (Symbol(), PERIOD_M15, 1, SWING_BARS, m15Low)  <= 0) return false;
 
     double structLevel = 0.0;
     bool   swingFound  = false;
 
-    if(direction == 1) // Buy -> tìm Swing Low gần nhất
+    if(direction == 1) // Buy -> tim Swing Low tren M15
     {
-        // Swing Low: bar [i] có Low thấp hơn cả [i-1] và [i+1]
+        // Swing Low: bar [i] co Low thap hon ca [i-1] va [i+1]
         for(int i = 1; i < SWING_BARS - 1; i++)
         {
-            if(m5Low[i] < m5Low[i-1] && m5Low[i] < m5Low[i+1])
+            if(m15Low[i] < m15Low[i-1] && m15Low[i] < m15Low[i+1])
             {
-                structLevel = m5Low[i];
+                structLevel = m15Low[i];
                 swingFound  = true;
-                Print(StringFormat("[SL] Swing Low tại bar-%d = %.2f", i+1, structLevel));
-                break;
-            }
-        }
-        if(!swingFound) // Fallback: Lowest Low trong 30 bar
-        {
-            structLevel = m5Low[ArrayMinimum(m5Low, 0, SWING_BARS)];
-            Print(StringFormat("[SL] Fallback Lowest Low (30 bar) = %.2f", structLevel));
-        }
-        sl = structLevel - atrVal * 1.5; // Buffer bên dưới swing low (1.5×ATR tránh noise)
-    }
-    else // Sell -> tìm Swing High gần nhất
-    {
-        for(int i = 1; i < SWING_BARS - 1; i++)
-        {
-            if(m5High[i] > m5High[i-1] && m5High[i] > m5High[i+1])
-            {
-                structLevel = m5High[i];
-                swingFound  = true;
-                Print(StringFormat("[SL] Swing High tại bar-%d = %.2f", i+1, structLevel));
+                Print(StringFormat("[SL] M15 Swing Low bar-%d = %.2f", i+1, structLevel));
                 break;
             }
         }
         if(!swingFound)
         {
-            structLevel = m5High[ArrayMaximum(m5High, 0, SWING_BARS)];
-            Print(StringFormat("[SL] Fallback Highest High (30 bar) = %.2f", structLevel));
+            structLevel = m15Low[ArrayMinimum(m15Low, 0, SWING_BARS)];
+            Print(StringFormat("[SL] M15 Lowest Low (20 bar) = %.2f", structLevel));
         }
-        sl = structLevel + atrVal * 1.5; // Buffer bên trên swing high (1.5×ATR tránh noise)
+        sl = structLevel - atrVal * 1.0; // Buffer nho hon (1.0xATR) vi M15 swing da ro rang hon M5
+    }
+    else // Sell -> tim Swing High tren M15
+    {
+        for(int i = 1; i < SWING_BARS - 1; i++)
+        {
+            if(m15High[i] > m15High[i-1] && m15High[i] > m15High[i+1])
+            {
+                structLevel = m15High[i];
+                swingFound  = true;
+                Print(StringFormat("[SL] M15 Swing High bar-%d = %.2f", i+1, structLevel));
+                break;
+            }
+        }
+        if(!swingFound)
+        {
+            structLevel = m15High[ArrayMaximum(m15High, 0, SWING_BARS)];
+            Print(StringFormat("[SL] M15 Highest High (20 bar) = %.2f", structLevel));
+        }
+        sl = structLevel + atrVal * 1.0;
     }
 
     sl = NormalizeDouble(sl, digits);
@@ -1205,15 +1398,13 @@ bool PlaceOrder1(int direction, double sl, double tp1, double tp2)
         req.price = SymbolInfoDouble(Symbol(), SYMBOL_BID);
     }
 
-    bool sent = OrderSend(req, res);
-
-    if(!sent || (res.retcode != TRADE_RETCODE_DONE && res.retcode != TRADE_RETCODE_PLACED))
+    if(!OrderSendRetry(req, res))
     {
-        Print(StringFormat("[LỖI MỞ L1] Retcode=%d | %s", res.retcode, res.comment));
+        Print(StringFormat("[LOI MO L1] Retcode=%d | %s", res.retcode, res.comment));
         return false;
     }
 
-    // --- Lưu trạng thái lệnh ---
+    // --- Luu trang thai lenh ---
     g_hasOrder1        = true;
     g_tradeDir         = direction;
     g_entry1           = (res.price > 0) ? res.price : req.price;
@@ -1222,9 +1413,10 @@ bool PlaceOrder1(int direction, double sl, double tp1, double tp2)
     g_tp2              = tp2;
     g_tp1Reached       = false;
     g_order2EverOpened = false;
-    g_ticket1          = res.deal;  // deal ticket; position ticket se cap nhat qua OnTradeTransaction/SyncPositionState
-    g_tradeOpenTime    = TimeCurrent(); // Luu thoi gian mo lenh de time-based exit
+    g_ticket1          = res.deal;
+    g_tradeOpenTime    = TimeCurrent();
     g_dailyTradeCount++;
+    SaveStateToGV(); // Luu ngay sau khi mo lenh thanh cong
 
     Print("+=========== LỆNH 1 MỞ THÀNH CÔNG ===========+");
     Print(StringFormat("| Chiều  : %-38s |", DirToStr(direction)));
@@ -1240,69 +1432,100 @@ bool PlaceOrder1(int direction, double sl, double tp1, double tp2)
 }
 
 //+------------------------------------------------------------------+
-//| MỞ LỆNH 2 (Averaging - Chỉ mở 1 lần duy nhất)                  |
-//| Điều kiện: Lệnh 1 lỗ đến 50% SL distance                       |
-//| SL = giống lệnh 1 | TP = tại giá entry lệnh 1                   |
+//| MO LENH 2 (DCA - Chi mo 1 lan duy nhat)                        |
+//| SL = giong lenh 1 (chia se cung SL)                            |
+//| TP = RR 1:1 tu entry L2 (khong phai breakeven L1)              |
+//| Volume = InpVolume1 (bang L1, tranh risk lech)                  |
+//| Bo loc RSI: chi mo khi gia da qua ban/qua mua tren M5           |
 //+------------------------------------------------------------------+
 void PlaceOrder2()
 {
-    // Chỉ mở 1 lần duy nhất trong chu kỳ lệnh
     if(g_order2EverOpened)
     {
-        Print("[L2] Đã mở lần này, không mở lại.");
+        Print("[L2] Da mo lan nay, khong mo lai.");
         return;
     }
 
-    // Kiểm tra giới hạn lệnh ngày
     if(g_dailyTradeCount >= InpMaxDailyTrades)
     {
-        Print(StringFormat("[L2] Không mở: đã đạt giới hạn %d lệnh/ngày", InpMaxDailyTrades));
+        Print(StringFormat("[L2] Khong mo: da dat gioi han %d lenh/ngay", InpMaxDailyTrades));
         return;
     }
+
+    // --- Bo loc RSI: tranh averaging vao momentum qua manh ---
+    if(!CheckRSIforL2())
+    {
+        Print("[L2] RSI khong hop le, bo qua mo L2");
+        return;
+    }
+
+    int    digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+    double point  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+
+    // Lay gia entry L2 hien tai
+    double l2Entry = (g_tradeDir == 1) ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
+                                       : SymbolInfoDouble(Symbol(), SYMBOL_BID);
+
+    // Tinh SL distance cua L2 (tu entry L2 toi SL chung)
+    double l2SlDist = MathAbs(l2Entry - g_sl);
+    if(l2SlDist < point * 5)
+    {
+        Print(StringFormat("[L2] SL distance qua nho (%.4f) -> Bo qua", l2SlDist));
+        return;
+    }
+
+    // TP L2 = RR 1:1 tu entry L2 (khong phai breakeven L1)
+    // Vi du: L1 entry=2000 SL=1990, L2 triggered tai 1993 -> L2 SL=1990 dist=3 -> L2 TP=1993+3=1996
+    double l2TP;
+    if(g_tradeDir == 1)
+        l2TP = NormalizeDouble(l2Entry + l2SlDist * 1.0, digits); // Buy: TP phia tren
+    else
+        l2TP = NormalizeDouble(l2Entry - l2SlDist * 1.0, digits); // Sell: TP phia duoi
 
     MqlTradeRequest req = {};
     MqlTradeResult  res = {};
 
     req.action       = TRADE_ACTION_DEAL;
     req.symbol       = Symbol();
-    req.volume       = InpVolume2;
-    req.sl           = g_sl;    // Cùng SL với lệnh 1
-    req.tp           = g_entry1; // TP tại giá entry của lệnh 1
+    req.volume       = InpVolume1;  // Bang L1, tranh risk lech
+    req.sl           = g_sl;        // Chia se SL chung voi L1
+    req.tp           = l2TP;        // TP theo RR 1:1 tu entry L2
     req.magic        = InpMagicNumber;
-    req.comment      = "XAUUSD_L2_EA"; // "L2" để nhận biết
+    req.comment      = "XAUUSD_L2_EA";
     req.deviation    = InpSlippage;
     req.type_filling = GetFillType();
 
     if(g_tradeDir == 1)
     {
         req.type  = ORDER_TYPE_BUY;
-        req.price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+        req.price = l2Entry;
     }
     else
     {
         req.type  = ORDER_TYPE_SELL;
-        req.price = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+        req.price = l2Entry;
     }
 
-    bool sent = OrderSend(req, res);
-
-    if(!sent || (res.retcode != TRADE_RETCODE_DONE && res.retcode != TRADE_RETCODE_PLACED))
+    if(!OrderSendRetry(req, res))
     {
-        Print(StringFormat("[LỖI MỞ L2] Retcode=%d | %s", res.retcode, res.comment));
+        Print(StringFormat("[LOI MO L2] Retcode=%d | %s", res.retcode, res.comment));
         return;
     }
 
     g_hasOrder2        = true;
     g_order2EverOpened = true;
-    g_ticket2          = res.deal;  // position ticket sẽ cập nhật qua OnTradeTransaction/SyncPositionState
+    g_ticket2          = res.deal;
+    g_entry2           = l2Entry;
     g_dailyTradeCount++;
+    SaveStateToGV();
 
-    Print("+=========== LỆNH 2 MỞ THÀNH CÔNG ===========+");
-    Print(StringFormat("| Chiều  : %-38s |", DirToStr(g_tradeDir)));
-    Print(StringFormat("| Entry  : %-38.2f |", req.price));
-    Print(StringFormat("| SL     : %-30.2f (= SL lệnh 1) |", g_sl));
-    Print(StringFormat("| TP     : %-28.2f (entry lệnh 1) |", g_entry1));
-    Print(StringFormat("| Volume : %-35.2f lot |", InpVolume2));
+    Print("+=========== LENH 2 MO THANH CONG ===========+");
+    PrintFormat("| Chieu  : %-38s |", DirToStr(g_tradeDir));
+    PrintFormat("| Entry  : %-38.2f |", l2Entry);
+    PrintFormat("| SL     : %-30.2f (= SL lenh 1) |", g_sl);
+    PrintFormat("| TP     : %-28.2f (RR 1:1 tu L2) |", l2TP);
+    PrintFormat("| SL dist: %-35.2f |", l2SlDist);
+    PrintFormat("| Volume : %-35.2f lot |", InpVolume1);
     Print("+==============================================+");
 }
 
@@ -1410,23 +1633,33 @@ void ManageSingleOrderTrailing(double curPrice)
     }
     else
     {
-        // --- Giai doan 2: Trailing tu TP1 -> TP2 (phan con lai sau partial close) ---
-        double tp1ToTp2 = MathAbs(g_tp2 - g_tp1);
+        // --- Giai doan 2: ATR Trailing tu TP1 -> TP2 ---
+        // Dung ATR M15 de trail SL: SL = gia hien tai - InpTrailATRMult * ATR_M15
+        // Cho khong gian tho nhieu hon EMA21 M15 (tranh bi quet SL som tren XAU bien dong manh)
+        double atrM15[];
+        ArraySetAsSeries(atrM15, true);
 
-        // Moc 50%% giua TP1 va TP2 -> doi SL len TP1 de lock RR 1:2 tren phan con lai
-        double midPoint = (g_tradeDir == 1) ? g_tp1 + tp1ToTp2 * 0.5
-                                            : g_tp1 - tp1ToTp2 * 0.5;
-
-        bool hitMid = (g_tradeDir == 1) ? (curPrice >= midPoint)
-                                        : (curPrice <= midPoint);
-        if(hitMid)
+        if(CopyBuffer(g_m15ATRHandle, 0, 1, 3, atrM15) > 0 && atrM15[0] > 0)
         {
-            double newSL  = NormalizeDouble(g_tp1, digits);
-            bool   better = (g_tradeDir == 1) ? (newSL > curSL) : (newSL < curSL);
+            double atrTrail = atrM15[0] * InpTrailATRMult;
+            double newSL;
 
-            if(better && ModifyPositionSL(g_ticket1, newSL, true))
-                Print(StringFormat("[TRAILING] OK 50%%TP2 dat (%.2f) -> SL doi len TP1=%.2f",
-                    midPoint, g_tp1));
+            if(g_tradeDir == 1)
+                newSL = NormalizeDouble(curPrice - atrTrail, digits); // Buy: SL phia duoi gia
+            else
+                newSL = NormalizeDouble(curPrice + atrTrail, digits); // Sell: SL phia tren gia
+
+            // Dam bao SL moi tot hon SL cu (chi trail theo huong co loi)
+            bool better = (g_tradeDir == 1) ? (newSL > curSL) : (newSL < curSL);
+
+            // Dam bao SL moi khong thap hon TP1 (khong lun lui ve vung lo)
+            bool aboveTP1 = (g_tradeDir == 1) ? (newSL >= g_tp1 - 0.5) : (newSL <= g_tp1 + 0.5);
+
+            if(better && aboveTP1 && ModifyPositionSL(g_ticket1, newSL, true))
+                LogThrottled("ATR_TRAIL",
+                    StringFormat("[TRAILING] ATR trail: SL moi=%.2f (gia=%.2f - %.1fx ATR M15=%.3f)",
+                        newSL, curPrice, InpTrailATRMult, atrM15[0]),
+                    60);
         }
     }
 }
@@ -1463,16 +1696,31 @@ void CheckAndTriggerOrder2(double curPrice, double slDist)
 //+------------------------------------------------------------------+
 void ManageTwoOrders(double curPrice)
 {
-    int    digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+    int    digits  = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
     bool   doClose = false;
 
-    // Giá hồi về trong vòng 1 giá so với entry lệnh 1
-    if(g_tradeDir == 1 && curPrice >= g_entry1 - 1.0) doClose = true;
-    if(g_tradeDir == -1 && curPrice <= g_entry1 + 1.0) doClose = true;
+    // Dieu kien dong L2 thu cong: gia hoi ve va L2 DANG CO LOI
+    // (tranh dong L2 o lo khi gia dao dong quanh entry1)
+    // L2 entry thap hon entry1 (Buy) nen chi dong khi gia da qua L2 entry
+    bool l2InProfit = false;
+    if(g_entry2 > 0)
+    {
+        if(g_tradeDir == 1)  l2InProfit = (curPrice > g_entry2 + 0.5); // Buy L2: gia tren entry L2
+        if(g_tradeDir == -1) l2InProfit = (curPrice < g_entry2 - 0.5); // Sell L2: gia duoi entry L2
+    }
+    else
+    {
+        // Neu khong biet entry L2 (restart), fallback: chi dong khi gia qua entry L1
+        l2InProfit = (g_tradeDir == 1)  ? (curPrice >= g_entry1) : (curPrice <= g_entry1);
+    }
+
+    // Dieu kien: gia hoi ve entry1 VA L2 dang co loi
+    if(g_tradeDir == 1  && curPrice >= g_entry1 - 0.5 && l2InProfit) doClose = true;
+    if(g_tradeDir == -1 && curPrice <= g_entry1 + 0.5 && l2InProfit) doClose = true;
 
     if(doClose && g_hasOrder2 && g_ticket2 != 0)
     {
-        Print(StringFormat("[2L] Giá hồi về gần entry (%.2f ~= entry %.2f ±1 giá) -> Đóng L2, SL L1->entry",
+        Print(StringFormat("[2L] Gia hoi ve entry (%.2f >= entry L1 %.2f) + L2 co loi -> Dong L2",
             curPrice, g_entry1));
 
         if(ClosePositionByTicket(g_ticket2))
@@ -1591,7 +1839,7 @@ bool ClosePartialPosition(ulong ticket, double closeVol)
         req.price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
     }
 
-    if(!OrderSend(req, res))
+    if(!OrderSendRetry(req, res))
     {
         Print(StringFormat("[LOI PARTIAL] ticket=%llu vol=%.2f retcode=%d | %s",
             ticket, closeVol, res.retcode, res.comment));
@@ -1648,14 +1896,14 @@ bool ClosePositionByTicket(ulong ticket)
         req.price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
     }
 
-    if(!OrderSend(req, res))
+    if(!OrderSendRetry(req, res))
     {
-        Print(StringFormat("[LỖI ĐÓNG] ticket=%llu retcode=%d | %s",
+        Print(StringFormat("[LOI DONG] ticket=%llu retcode=%d | %s",
             ticket, res.retcode, res.comment));
         return false;
     }
 
-    Print(StringFormat("[ĐÓNG] OK ticket=%llu vol=%.2f", ticket, vol));
+    Print(StringFormat("[DONG] OK ticket=%llu vol=%.2f", ticket, vol));
     return true;
 }
 
