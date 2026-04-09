@@ -1,0 +1,54 @@
+version: '3.9'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mikrotik-backend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - WS_PORT=3002
+      - FRONTEND_URL=http://localhost:5173
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - JWT_EXPIRY=${JWT_EXPIRY:-8h}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - DB_PATH=/data/mikrotik.db
+      - APPLY_RATE_LIMIT_MS=${APPLY_RATE_LIMIT_MS:-5000}
+    volumes:
+      - mikrotik-data:/data
+    ports:
+      - "3001:3001"
+      - "3002:3002"
+    networks:
+      - mikrotik-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mikrotik-frontend
+    restart: unless-stopped
+    environment:
+      - VITE_API_URL=http://localhost:3001
+    ports:
+      - "5173:80"
+    networks:
+      - mikrotik-net
+    depends_on:
+      - backend
+
+volumes:
+  mikrotik-data:
+    driver: local
+
+networks:
+  mikrotik-net:
+    driver: bridge
